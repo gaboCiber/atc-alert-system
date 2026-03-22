@@ -85,11 +85,29 @@ class PDFDebugger(QGraphicsView):
 
             self.saved_rect = rect   # ← guardar región
 
-            print("\nSelected region:")
-            print(f"x0={rect.left():.0f}")
-            print(f"y0={rect.top():.0f}")
-            print(f"x1={rect.right():.0f}")
-            print(f"y1={rect.bottom():.0f}")
+            # Obtener dimensiones de la página actual
+            page = self.doc.load_page(self.page_index)
+            page_width = page.rect.width
+            page_height = page.rect.height
+
+            # Coordenadas del debugger (fitz)
+            x0 = rect.left()
+            y0 = rect.top()
+            x1 = rect.right()
+            y1 = rect.bottom()
+
+            # Convertir a márgenes para kex (pypdf)
+            left = x0
+            right = page_width - x1
+            top = y0  # distancia desde arriba
+            bottom = page_height - y1  # distancia desde abajo
+
+            print("\n=== Coordenadas para kex ===")
+            print(f"margins = ({left:.0f}, {bottom:.0f}, {right:.0f}, {top:.0f})")
+            print(f"// kex(doc_path, doc_dir, model, margins=({left:.0f}, {bottom:.0f}, {right:.0f}, {top:.0f}))")
+            print("\nCoordenadas originales (debugger):")
+            print(f"x0={x0:.0f}, y0={y0:.0f}, x1={x1:.0f}, y1={y1:.0f}")
+            print(f"Dimensiones página: {page_width:.0f} x {page_height:.0f}")
 
             self.start = None
 
