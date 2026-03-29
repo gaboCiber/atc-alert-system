@@ -25,6 +25,14 @@ class EmbeddingConfig:
 
 
 @dataclass
+class ResumeConfig:
+    """Configuration for resuming extraction from previous state."""
+    start_page: int = 1  # Page to start from (1-indexed)
+    load_previous_entities: bool = True  # Load entities from previous runs
+    previous_output_dir: Optional[str] = None  # Directory with previous results
+
+
+@dataclass
 class PipelineConfig:
     """Main configuration for the knowledge extraction pipeline."""
     # Model configuration
@@ -44,8 +52,13 @@ class PipelineConfig:
     # Output configuration
     output_dir: str = "output"
     
+    # Resume configuration
+    resume: ResumeConfig = field(default_factory=ResumeConfig)
+    
     def __post_init__(self):
         if isinstance(self.model, dict):
             self.model = ModelConfig(**self.model)
         if isinstance(self.embedding, dict):
             self.embedding = EmbeddingConfig(**self.embedding)
+        if isinstance(self.resume, dict):
+            self.resume = ResumeConfig(**self.resume)

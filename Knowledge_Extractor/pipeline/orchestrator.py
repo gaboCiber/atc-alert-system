@@ -1,6 +1,8 @@
 """
 Pipeline orchestrator - coordinates the full extraction workflow.
 """
+import json
+import glob
 import requests
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
@@ -58,6 +60,71 @@ class KnowledgeExtractionPipeline:
         self.id_manager = IDManager()
         self.file_utils = FileUtils()
     
+    def _load_previous_state(self, doc_dir: str):
+        """
+        Load entities and IDs from previously processed pages.
+        
+        Args:
+            doc_dir: Directory with previous extraction results.
+        """
+        if not self.config.resume.load_previous_entities:
+            return
+        
+        # Use specified previous dir or current output dir
+        load_dir = self.config.resume.previous_output_dir or doc_dir
+        load_path = Path(load_dir)
+        
+        if not load_path.exists():
+            print(f"⚠️ Previous output directory not found: {load_dir}")
+            return
+        
+        # Find all pagina_*.json files
+        page_files = sorted(load_path.glob("pagina_*.json"))
+        
+        if not page_files:
+            print(f"ℹ️ No previous page results found in {load_dir}")
+            return
+        
+        print(f"📂 Loading previous state from {len(page_files)} pages...")
+        
+        loaded_entities = 0
+        for page_file in page_files:
+            try:
+                with open(page_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                page_num = int(page_file.stem.split('_')[1])
+                
+                # Skip pages after start_page - 1
+                if page_num >= self.config.resume.start_page:
+                    continue
+                
+                # Load entities from sentence_results or directly from ner
+                if "sentence_results" in data:
+                    for chunk_data in data["sentence_results"]:
+                        ner = chunk_data.get("ner", {})
+                        if ner and isinstance(ner, dict):
+                            entities = ner.get("entities", [])
+                            self.context_manager.add_entities(entities)
+                            loaded_entities += len(entities)
+                            
+                            # Update ID manager
+                            self.id_manager.update_from_extraction(ner)
+                
+                # Load last IDs from last_ids_summary if available
+                if "last_ids_summary" in data:
+                    for category, last_id in data["last_ids_summary"].items():
+                        if last_id:
+                            self.id_manager.last_ids[category] = last_id
+                            
+            except Exception as e:
+                print(f"⚠️ Error loading {page_file.name}: {e}")
+        
+        total_entities = self.context_manager.get_entity_count()
+        print(f"✅ Loaded {loaded_entities} entities from {self.config.resume.start_page - 1} pages")
+        print(f"📊 Total accumulated entities: {total_entities}")
+        print(f"🔢 Last IDs: {self.id_manager.get_all_ids()}")
+    
     def process(self, pdf_path: str, output_dir: Optional[str] = None) -> List[ExtractionResult]:
         """
         Process a PDF document end-to-end.
@@ -76,6 +143,10 @@ class KnowledgeExtractionPipeline:
             pdf_path, output_dir, self.config.model.name
         )
         
+        # Load previous state if resuming
+        if self.config.resume.start_page > 1 or self.config.resume.load_previous_entities:
+            self._load_previous_state(doc_dir)
+        
         # Extract text from PDF
         pages = self.doc_processor.extract_text(pdf_path)
         
@@ -83,6 +154,11 @@ class KnowledgeExtractionPipeline:
         
         try:
             for page in pages:
+                # Skip pages before start_page
+                if page.number < self.config.resume.start_page:
+                    print(f"⏭️  Skipping page {page.number} (before start_page {self.config.resume.start_page})")
+                    continue
+                    
                 page_results = self._process_page(page, doc_dir)
                 results.extend(page_results)
                 self.state.processed_pages += 1

@@ -5,7 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .config.settings import PipelineConfig, ModelConfig, EmbeddingConfig
+from .config.settings import PipelineConfig, ModelConfig, EmbeddingConfig, ResumeConfig
 from .pipeline.orchestrator import KnowledgeExtractionPipeline
 
 
@@ -53,6 +53,25 @@ def main():
         help="PDF margins in points: left bottom right top"
     )
     
+    # Resume options
+    parser.add_argument(
+        "--start-page",
+        type=int,
+        default=1,
+        help="Page to start processing from (1-indexed, default: 1)"
+    )
+    
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from previous run, loading entities from existing output"
+    )
+    
+    parser.add_argument(
+        "--previous-dir",
+        help="Directory with previous extraction results (for resuming)"
+    )
+    
     args = parser.parse_args()
     
     # Validate PDF exists
@@ -66,11 +85,18 @@ def main():
         base_url=args.base_url,
     )
     
+    resume_config = ResumeConfig(
+        start_page=args.start_page,
+        load_previous_entities=args.resume or args.start_page > 1,
+        previous_output_dir=args.previous_dir,
+    )
+    
     config = PipelineConfig(
         model=model_config,
         granularity=args.granularity,
         output_dir=args.output,
         margins=tuple(args.margins) if args.margins else None,
+        resume=resume_config,
     )
     
     # Run pipeline
@@ -78,6 +104,10 @@ def main():
     print(f"Model: {args.model}")
     print(f"Granularity: {args.granularity}")
     print(f"Output: {args.output}")
+    if args.start_page > 1:
+        print(f"Starting from page: {args.start_page}")
+    if args.resume:
+        print(f"Resuming from previous state")
     
     pipeline = KnowledgeExtractionPipeline(config)
     
