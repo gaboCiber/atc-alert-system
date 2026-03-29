@@ -142,6 +142,10 @@ class KnowledgeExtractionPipeline:
         doc_dir = self.file_utils.configure_output(
             pdf_path, output_dir, self.config.model.name
         )
+        print(f"\n📄 Processing PDF: {pdf_path}")
+        print(f"📁 Output directory: {doc_dir}")
+        print(f"🤖 Model: {self.config.model.name}")
+        print(f"📐 Granularity: {self.config.granularity}")
         
         # Load previous state if resuming
         if self.config.resume.start_page > 1 or self.config.resume.load_previous_entities:
@@ -149,6 +153,10 @@ class KnowledgeExtractionPipeline:
         
         # Extract text from PDF
         pages = self.doc_processor.extract_text(pdf_path)
+        total_pages = len(pages)
+        
+        print(f"📊 Total pages in document: {total_pages}")
+        print(f"🚀 Starting extraction...\n")
         
         results = []
         
@@ -156,36 +164,60 @@ class KnowledgeExtractionPipeline:
             for page in pages:
                 # Skip pages before start_page
                 if page.number < self.config.resume.start_page:
-                    print(f"⏭️  Skipping page {page.number} (before start_page {self.config.resume.start_page})")
+                    print(f"⏭️  Skipping page {page.number}/{total_pages} (before start_page {self.config.resume.start_page})")
                     continue
+                
+                print(f"\n{'='*60}")
+                print(f"📄 Processing page {page.number}/{total_pages}")
+                print(f"{'='*60}")
                     
-                page_results = self._process_page(page, doc_dir)
+                page_results = self._process_page(page, doc_dir, total_pages)
                 results.extend(page_results)
                 self.state.processed_pages += 1
+                
+                # Progress summary after each page
+                print(f"\n✅ Page {page.number} complete - {len(page_results)} chunks processed")
+                print(f"📊 Total entities accumulated: {self.context_manager.get_entity_count()}")
+                print(f"🔢 Current IDs: {self.id_manager.get_all_ids()}")
+                
         finally:
+            print(f"\n{'='*60}")
+            print(f"🏁 Processing complete!")
+            print(f"📄 Pages processed: {self.state.processed_pages}/{total_pages}")
+            print(f"🔧 Total chunks: {self.state.processed_chunks}")
+            print(f"📦 Total entities: {self.context_manager.get_entity_count()}")
+            print(f"{'='*60}\n")
+            
             # Always cleanup, even if there was an error
             self.cleanup()
         
         return results
     
-    def _process_page(self, page: Page, output_dir: str) -> List[ExtractionResult]:
+    def _process_page(self, page: Page, output_dir: str, total_pages: int) -> List[ExtractionResult]:
         """Process a single page."""
         results = []
         
         # Segment into chunks based on granularity
+        print(f"  🔍 Segmenting page {page.number}...")
+        
         if self.config.granularity == "sentence":
             sentences = self.text_segmenter.segment(page.text)
             chunks = sentences
+            print(f"     └─ Split into {len(chunks)} sentences")
         elif self.config.granularity == "chunk":
             # LLM segmentation
-            sentences = page.text.split("\n") #self.text_segmenter.segment(page.text)
+            sentences = page.text.split("\n")
+            print(f"     └─ Found {len(sentences)} lines, grouping into logical chunks...")
             if sentences:
                 segmentation = self.sentence_extractor.segment(sentences)
                 chunks = self.sentence_extractor.create_chunks(sentences, segmentation)
+                print(f"     └─ Created {len(chunks)} logical chunks")
             else:
                 chunks = []
+                print(f"     └─ No content to process")
         else:  # page
             chunks = [page.text]
+            print(f"     └─ Processing as single page unit")
         
         page_data = {
             "texto_original": page.text,
@@ -196,6 +228,10 @@ class KnowledgeExtractionPipeline:
         }
         
         for chunk_idx, chunk_text in enumerate(chunks):
+            # Progress indicator for chunks
+            progress = f"[{chunk_idx+1}/{len(chunks)}]"
+            print(f"    {progress} Processing chunk {chunk_idx+1}...", end=" ")
+            
             result = self._process_chunk(
                 page.number, chunk_idx, chunk_text
             )
@@ -205,10 +241,23 @@ class KnowledgeExtractionPipeline:
             if result.extraction:
                 # Add entities to context manager
                 entities = result.extraction.get("entities", [])
+                relationships = result.extraction.get("relationships", [])
+                rules = result.extraction.get("rules", [])
+                events = result.extraction.get("events", [])
+                procedures = result.extraction.get("procedures", [])
+                definitions = result.extraction.get("definitions", [])
+                
                 self.context_manager.add_entities(entities)
                 
                 # Update ID manager
                 self.id_manager.update_from_extraction(result.extraction)
+                
+                # Log extraction results
+                total_extracted = len(entities) + len(relationships) + len(rules) + len(events) + len(procedures) + len(definitions)
+                print(f"✓ Extracted: {len(entities)}E, {len(relationships)}R, {len(rules)}RULE, {len(events)}EV, {len(procedures)}P, {len(definitions)}D")
+            else:
+                error_msg = result.error or "Unknown error"
+                print(f"✗ Failed: {error_msg[:50]}..." if len(error_msg) > 50 else f"✗ Failed: {error_msg}")
             
             # Build result data
             chunk_data = {
@@ -251,6 +300,10 @@ class KnowledgeExtractionPipeline:
         
         # Get last IDs
         last_ids = self.id_manager.get_all_ids()
+        
+        # Log context info
+        if context_entities:
+            print(f"(context: {len(context_entities)} entities)", end=" ")
         
         try:
             # Extract with KEX
