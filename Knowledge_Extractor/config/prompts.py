@@ -36,44 +36,45 @@ Return valid JSON matching the AeronauticalExtraction schema.
 """
 
 SENTENCE_SEGMENTATION_PROMPT = """
-You are given a list of sentences extracted from an aeronautical document. Each sentence has an index (starting from 0). Your task is to group these sentences into logical blocks that represent complete operational concepts (e.g., a complete rule, a procedure, a list, a warning, etc.).
+You are given a list of {total_sentences} sentences extracted from an aeronautical document. Each sentence has an index (starting from 0 up to {last_index}). Your task is to group these sentences into logical blocks that represent complete operational concepts (e.g., a complete rule, a procedure, a list, a warning, etc.).
 
 **CRITICAL RULES (MUST FOLLOW):**
-1. **FULL COVERAGE REQUIRED:** The first chunk MUST start at index 0. The last chunk MUST end at the last sentence index (N-1). NO EXCEPTIONS.
-2. **NO GAPS:** Every single sentence from 0 to N-1 must be included in exactly one chunk. If you leave any sentence out, the output is INVALID.
+1. **FULL COVERAGE REQUIRED:** The first chunk MUST start at index 0. The last chunk MUST end at exactly {last_index}. NO EXCEPTIONS.
+2. **NO GAPS:** Every single sentence from 0 to {last_index} must be included in exactly one chunk. If you leave any sentence out, the output is INVALID.
 3. **CONTIGUOUS RANGES:** Each chunk is [start, end] where start <= end. No negative indices.
 4. **NO OVERLAPS:** Chunks cannot share indices. If chunk 1 is [0, 4], chunk 2 must start at 5.
 5. **ORDERED:** Chunks must be in increasing order by start index.
 
 **VALIDATION CHECK:** After generating chunks, verify that:
 - First chunk starts at 0
-- Last chunk ends at N-1 (where N = total number of sentences)
+- Last chunk ends at {last_index} (the last sentence index)
 - No gaps between chunks
+- Total sentences covered: {total_sentences}
 
 **Output format:** A JSON object with a "chunks" array containing objects with "indices": [start, end].
 
-**Example:**
-Input (6 sentences, indices 0-5):
-{
-  0: "In all cases a conditional clearance shall be given in the following order and consist of:"},
-  1: "1. Identification;"},
-  2: "2. The condition"},
-  3: "3. The clearance; and"},
-  4: "4. Brief reiteration of the condition"},
-  5: "Conditional phrases shall not be used for movements affecting the active runway(s)."}
-}
+**Example (sentences=6, indices 0-5):**
+Input:
+{{
+  0: "In all cases a conditional clearance shall be given in the following order and consist of:"}},
+  1: "1. Identification;",
+  2: "2. The condition",
+  3: "3. The clearance; and",
+  4: "4. Brief reiteration of the condition",
+  5: "Conditional phrases shall not be used for movements affecting the active runway(s)."
+}}
 
 Output (covers 0-5 completely):
-{
+{{
   "chunks": [
-    {"indices": [0, 4]},
-    {"indices": [5, 5]}
+    {{"indices": [0, 4]}},
+    {{"indices": [5, 5]}}
   ]
-}
+}}
 
-**REMINDER:** If there are N sentences (indices 0 to N-1), your output MUST cover exactly [0, N-1].
+**REMINDER:** You have {total_sentences} sentences total (indices 0 to {last_index}). Your output MUST cover exactly this range.
 
-Now process the following sentences. Return only valid JSON covering ALL sentences from first to last.
+Now process the following sentences. Return only valid JSON covering ALL sentences from first (0) to last ({last_index}).
 
 """
 
