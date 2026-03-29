@@ -205,19 +205,33 @@ class KnowledgeExtractionPipeline:
             chunks = sentences
             print(f"     └─ Split into {len(chunks)} sentences")
         elif self.config.granularity == "chunk":
-            # LLM segmentation
+            # Try LLM segmentation first, fallback to NLTK on failure
             sentences = page.text.split("\n")
-            print(f"     └─ Found {len(sentences)} lines, grouping into logical chunks...")
+            print(f"     └─ Found {len(sentences)} lines, attempting LLM segmentation...")
+            
             if sentences:
-                segmentation = self.sentence_extractor.segment(sentences)
-                chunks = self.sentence_extractor.create_chunks(sentences, segmentation)
-                print(f"     └─ Created {len(chunks)} logical chunks")
+                try:
+                    segmentation = self.sentence_extractor.segment(sentences)
+                    chunks = self.sentence_extractor.create_chunks(sentences, segmentation)
+                    print(f"     └─ ✓ LLM created {len(chunks)} logical chunks")
+                except Exception as e:
+                    # Fallback to NLTK sentence segmentation
+                    print(f"     ⚠️  LLM segmentation failed: {str(e)[:60]}...")
+                    print(f"     🔄 Falling back to NLTK sentence segmentation...")
+                    chunks = self.text_segmenter.segment(page.text)
+                    print(f"     └─ ✓ NLTK created {len(chunks)} sentence chunks")
             else:
                 chunks = []
                 print(f"     └─ No content to process")
         else:  # page
             chunks = [page.text]
             print(f"     └─ Processing as single page unit")
+        
+        # Save chunks to separate file
+        self.file_utils.save_page_chunks(
+            output_dir, page.number, chunks, self.config.granularity
+        )
+        print(f"  💾 Saved {len(chunks)} chunks to pagina_{page.number}_chunks.json")
         
         page_data = {
             "texto_original": page.text,
@@ -305,39 +319,43 @@ class KnowledgeExtractionPipeline:
         if context_entities:
             print(f"(context: {len(context_entities)} entities)", end=" ")
         
-        try:
-            # Extract with KEX
-            extraction, raw_output = self.kex_extractor.extract(
-                text=chunk_text,
-                context_entities=context_entities,
-                last_ids=last_ids,
-            )
+        # Extract with KEX (always returns, even on failure)
+        extraction, raw_output = self.kex_extractor.extract(
+            text=chunk_text,
+            context_entities=context_entities,
+            last_ids=last_ids,
+        )
+        
+        # Check if extraction succeeded
+        if extraction is None:
+            # Extraction failed after all retries, but we have raw_output for debugging
+            error_msg = "KEX extraction failed after all retries (see raw_llm_output for details)"
+            print(f"✗ Failed: {error_msg[:60]}...")
             
-            # Convert to dict
-            extraction_dict = extraction.model_dump()
-            
-            return ExtractionResult(
-                page_number=page_number,
-                chunk_index=chunk_index,
-                chunk_text=chunk_text,
-                extraction=extraction_dict,
-                raw_llm_output=raw_output,
-                context_entities=context_entities,
-                last_ids=last_ids,
-            )
-            
-        except Exception as e:
-            # Return error result
             return ExtractionResult(
                 page_number=page_number,
                 chunk_index=chunk_index,
                 chunk_text=chunk_text,
                 extraction=None,
-                raw_llm_output=None,
+                raw_llm_output=raw_output,  # Always save for debugging
                 context_entities=context_entities,
                 last_ids=last_ids,
-                error=str(e),
+                error=error_msg,
             )
+        
+        # Successful extraction
+        # Convert to dict
+        extraction_dict = extraction.model_dump()
+        
+        return ExtractionResult(
+            page_number=page_number,
+            chunk_index=chunk_index,
+            chunk_text=chunk_text,
+            extraction=extraction_dict,
+            raw_llm_output=raw_output,
+            context_entities=context_entities,
+            last_ids=last_ids,
+        )
     
     def cleanup(self):
         """

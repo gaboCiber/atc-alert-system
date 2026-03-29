@@ -55,7 +55,43 @@ class FileUtils:
             json.dump(data, f, ensure_ascii=False, indent=2)
     
     @staticmethod
-    def extract_accumulated_entities(folder_path: str) -> Dict[str, Dict[str, Any]]:
+    def save_page_chunks(
+        output_dir: str,
+        page_number: int,
+        chunks: List[str],
+        granularity: str
+    ):
+        """
+        Save only the text chunks for a page (without NER results).
+        
+        Args:
+            output_dir: Output directory.
+            page_number: Page number.
+            chunks: List of text chunks.
+            granularity: Segmentation granularity used.
+        """
+        data = {
+            "page_number": page_number,
+            "granularity": granularity,
+            "total_chunks": len(chunks),
+            "chunks": [
+                {
+                    "chunk_index": i,
+                    "text": chunk,
+                    "char_count": len(chunk)
+                }
+                for i, chunk in enumerate(chunks)
+            ]
+        }
+        
+        filepath = Path(output_dir) / f"pagina_{page_number}_chunks.json"
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    
+    @staticmethod
+    def extract_accumulated_entities(
+        folder_path: str
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Extract all unique entities from a folder of page results.
         

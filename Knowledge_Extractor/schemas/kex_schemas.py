@@ -110,7 +110,6 @@ class Entity(BaseModel):
     subtype: Optional[str] = Field(None, description="More specific classification (e.g., active)")
     aliases: List[str] = Field(default_factory=list, description="List of synonyms or alternative phrasings")
     context: str = Field(..., description="Brief semantic description")
-    attributes: EntityAttributes = Field(default_factory=EntityAttributes)
 
 class Relationship(BaseModel):
     id: str = Field(..., description="UNIQUE_ID (e.g., R001)")

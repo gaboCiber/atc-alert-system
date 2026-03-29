@@ -83,14 +83,42 @@ class SentenceExtractor:
             
         Returns:
             List of concatenated text chunks.
+            
+        Raises:
+            ValueError: If segmentation doesn't cover all sentences.
         """
+        if not segmentation.chunks:
+            raise ValueError("No chunks returned by LLM segmentation")
+        
+        # Sort chunks by start index
+        sorted_chunks = sorted(segmentation.chunks, key=lambda x: x.indices[0])
+        
+        # Validate full coverage
+        total_sentences = len(sentences)
+        first_start = sorted_chunks[0].indices[0]
+        last_end = sorted_chunks[-1].indices[1]
+        
+        if first_start != 0:
+            raise ValueError(
+                f"LLM segmentation doesn't start at beginning: "
+                f"first chunk starts at {first_start}, expected 0. "
+                f"Missing first {first_start} lines."
+            )
+        
+        if last_end != total_sentences - 1:
+            raise ValueError(
+                f"LLM segmentation doesn't cover all lines: "
+                f"last chunk ends at {last_end}, expected {total_sentences - 1}. "
+                f"Missing lines {last_end + 1} to {total_sentences - 1}."
+            )
+        
         chunks = []
-        for chunk in segmentation.chunks:
+        for chunk in sorted_chunks:
             start, end = chunk.indices
             
-            # Validate range
+            # Validate range (should be valid given prior checks, but safety first)
             if start < 0 or end >= len(sentences) or start > end:
-                continue
+                raise ValueError(f"Invalid chunk range: [{start}, {end}] for {len(sentences)} sentences")
             
             # Concatenate sentences
             chunk_sentences = sentences[start:end+1]

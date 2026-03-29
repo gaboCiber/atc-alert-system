@@ -100,10 +100,6 @@ def main():
     )
     
     # Run pipeline
-    print(f"Processing: {args.pdf_path}")
-    print(f"Model: {args.model}")
-    print(f"Granularity: {args.granularity}")
-    print(f"Output: {args.output}")
     if args.start_page > 1:
         print(f"Starting from page: {args.start_page}")
     if args.resume:
