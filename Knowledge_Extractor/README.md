@@ -7,6 +7,8 @@ Extract aeronautical knowledge (entities, relationships, rules, procedures) from
 - **PDF Text Extraction** with custom margins (PyMuPDF)
 - **Three Granularity Levels**: page, sentence, chunk (NLTK + LLM segmentation)
 - **Context-aware Extraction** with semantic embeddings (sentence-transformers)
+- **Expanded Context Types**: Entities, Definitions, Rules, and Relationships for richer context
+- **External Chunks Source**: Load pre-generated chunks from another folder
 - **Resume Capability**: Start from specific page with previous entities as context
 - **Sequential ID Management**: E001, R001, RULE001, EV001, P001, D001
 - **Structured Output** via Pydantic/Instructor with automatic validation
@@ -43,6 +45,7 @@ Requirements:
 ### CLI
 
 #### Basic Extraction
+
 ```bash
 # Sentence granularity (default)
 python -m Knowledge_Extractor document.pdf -m llama3.2 -o output/
@@ -54,7 +57,40 @@ python -m Knowledge_Extractor document.pdf -g page
 python -m Knowledge_Extractor document.pdf -g chunk
 ```
 
+#### Context Control
+
+Control which context types are included in the extraction prompt:
+
+```bash
+# Include all context types (default)
+python -m Knowledge_Extractor document.pdf
+
+# Exclude specific types
+python -m Knowledge_Extractor document.pdf --no-definitions --no-rules
+
+# Adjust context limits per type
+python -m Knowledge_Extractor document.pdf --definition-limit 20 --rule-limit 10 --relationship-limit 15
+```
+
+#### External Chunks Source
+
+Load pre-generated chunks from another folder:
+
+```bash
+# Use chunks from external source
+python -m Knowledge_Extractor document.pdf --chunks-source "path/to/chunks/"
+
+# Combine with output directory
+python -m Knowledge_Extractor document.pdf --chunks-source "output/old_run/" -o "output/new_run/"
+
+# Partial reprocessing: skip PDF extraction for pages with external chunks
+python -m Knowledge_Extractor document.pdf --chunks-source "chunks_dir/" --start-page 5
+```
+
+**Note**: When `--chunks-source` is provided, pages with existing chunk files (`pagina_N_chunks.json`) will skip PDF text extraction entirely and use the external chunks. All chunks (external or generated) are saved to the output directory.
+
 #### Resume from Specific Page
+
 ```bash
 # Start from page 5, loading entities from pages 1-4
 python -m Knowledge_Extractor document.pdf --start-page 5 --resume
@@ -64,6 +100,7 @@ python -m Knowledge_Extractor document.pdf --start-page 10 --previous-dir output
 ```
 
 #### Custom Margins
+
 ```bash
 # Extract only from specific PDF area (left, bottom, right, top in points)
 python -m Knowledge_Extractor document.pdf --margins 34 76 1 33
@@ -89,10 +126,20 @@ results = extract_knowledge("document.pdf", output_dir="output")
 ### Advanced Pipeline Usage
 
 ```python
-from Knowledge_Extractor.config.settings import PipelineConfig, ResumeConfig
+from Knowledge_Extractor.config.settings import PipelineConfig, ResumeConfig, EmbeddingConfig
 from Knowledge_Extractor.pipeline.orchestrator import KnowledgeExtractionPipeline
 
-# Resume from page 5
+# Configure expanded context
+embedding_config = EmbeddingConfig(
+    definition_top_k=10,
+    rule_top_k=5,
+    relationship_top_k=10,
+    include_definitions=True,
+    include_rules=True,
+    include_relationships=True,
+)
+
+# Resume from page 5 with external chunks
 resume_config = ResumeConfig(
     start_page=5,
     load_previous_entities=True,
@@ -102,7 +149,9 @@ resume_config = ResumeConfig(
 config = PipelineConfig(
     model_name="llama3.2",
     granularity="sentence",
-    resume=resume_config
+    embedding=embedding_config,
+    resume=resume_config,
+    chunks_source_dir="path/to/external/chunks",  # Optional: load pre-generated chunks
 )
 
 pipeline = KnowledgeExtractionPipeline(config)
@@ -110,6 +159,9 @@ results = pipeline.process("document.pdf")
 
 print(f"Processed {pipeline.state.processed_pages} pages")
 print(f"Accumulated {pipeline.context_manager.get_entity_count()} entities")
+print(f"Accumulated {pipeline.context_manager.get_definition_count()} definitions")
+print(f"Accumulated {pipeline.context_manager.get_rule_count()} rules")
+print(f"Accumulated {pipeline.context_manager.get_relationship_count()} relationships")
 ```
 
 ## Output Structure
@@ -150,11 +202,21 @@ Each page generates a JSON file (`pagina_N.json`):
 - `model_name`: sentence-transformers model
 - `top_k`: Number of context entities to select
 - `threshold`: Similarity threshold for context selection
+- `definition_top_k`: Max definitions in context (default: 10)
+- `rule_top_k`: Max rules in context (default: 5)
+- `relationship_top_k`: Max relationships in context (default: 10)
+- `include_definitions`: Include definitions in context (default: True)
+- `include_rules`: Include rules in context (default: True)
+- `include_relationships`: Include relationships in context (default: True)
 
 ### Resume Settings
 - `start_page`: Page to start from (1-indexed)
 - `load_previous_entities`: Load entities from previous runs
 - `previous_output_dir`: Custom directory for loading state
+
+### Pipeline Settings
+- `chunks_source_dir`: Directory with pre-generated chunks (optional)
+- `granularity`: Processing level (page, sentence, chunk)
 
 ## Extracted Schema
 
