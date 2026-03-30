@@ -4,7 +4,7 @@ File utilities for output management.
 import os
 import json
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 class FileUtils:
@@ -88,6 +88,62 @@ class FileUtils:
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     
+    @staticmethod
+    def load_page_chunks(chunks_dir: str, page_number: int) -> Optional[List[str]]:
+        """
+        Load pre-generated chunks for a specific page.
+        
+        Args:
+            chunks_dir: Directory containing chunk JSON files.
+            page_number: Page number to load chunks for.
+            
+        Returns:
+            List of chunk texts if file exists, None otherwise.
+        """
+        filepath = Path(chunks_dir) / f"pagina_{page_number}_chunks.json"
+        
+        if not filepath.exists():
+            return None
+        
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Extract chunk texts from the JSON structure
+            chunks_data = data.get("chunks", [])
+            chunks = [chunk.get("text", "") for chunk in chunks_data]
+            
+            return chunks if chunks else None
+        except Exception as e:
+            print(f"⚠️ Error loading chunks from {filepath}: {e}")
+            return None
+    
+    @staticmethod
+    def get_available_chunk_pages(chunks_dir: str) -> set:
+        """
+        Get set of page numbers that have chunk files in the source directory.
+        
+        Args:
+            chunks_dir: Directory containing chunk JSON files.
+            
+        Returns:
+            Set of page numbers (integers) that have chunk files.
+        """
+        import re
+        available_pages = set()
+        chunks_path = Path(chunks_dir)
+        
+        if not chunks_path.exists():
+            return available_pages
+        
+        for chunk_file in chunks_path.glob("pagina_*_chunks.json"):
+            # Extract page number from filename like "pagina_5_chunks.json"
+            match = re.match(r"pagina_(\d+)_chunks\.json", chunk_file.name)
+            if match:
+                available_pages.add(int(match.group(1)))
+        
+        return available_pages
+
     @staticmethod
     def extract_accumulated_entities(
         folder_path: str

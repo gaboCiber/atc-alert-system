@@ -157,9 +157,59 @@ class KnowledgeExtractionPipeline:
         if self.config.resume.start_page > 1 or self.config.resume.load_previous_entities:
             self._load_previous_state(doc_dir)
         
-        # Extract text from PDF
-        pages = self.doc_processor.extract_text(pdf_path)
-        total_pages = len(pages)
+        # Check which pages have external chunks (for optimization)
+        external_chunk_pages = set()
+        if self.config.chunks_source_dir:
+            print(f"🔍 Checking chunks source: {self.config.chunks_source_dir}")
+            external_chunk_pages = self.file_utils.get_available_chunk_pages(
+                self.config.chunks_source_dir
+            )
+            if external_chunk_pages:
+                print(f"📂 Found external chunks for pages: {sorted(external_chunk_pages)[:10]}{'...' if len(external_chunk_pages) > 10 else ''}")
+            else:
+                print(f"⚠️ No external chunks found in: {self.config.chunks_source_dir}")
+        
+        # Get total pages from PDF without extracting text
+        import fitz
+        doc = fitz.open(pdf_path)
+        total_pages = doc.page_count
+        doc.close()
+        
+        # Determine which pages need PDF text extraction
+        pages_needing_extraction = [
+            i + 1 for i in range(total_pages)
+            if (i + 1) not in external_chunk_pages and (i + 1) >= self.config.resume.start_page
+        ]
+        
+        # Extract text only for pages that need it
+        extracted_texts = {}
+        if pages_needing_extraction:
+            print(f"📖 Extracting text from {len(pages_needing_extraction)} pages...")
+            doc = fitz.open(pdf_path)
+            for page_num in pages_needing_extraction:
+                page = doc[page_num - 1]
+                text = self.doc_processor._extract_page_text(page)
+                extracted_texts[page_num] = text
+            doc.close()
+        
+        # Build list of Page objects
+        pages = []
+        for i in range(total_pages):
+            page_num = i + 1
+            if page_num in external_chunk_pages:
+                # Page has external chunks - no PDF text needed
+                pages.append(Page(
+                    number=page_num,
+                    text="",  # Empty text - will use external chunks
+                    metadata={"external_chunks": True}
+                ))
+            else:
+                # Page needs PDF text
+                pages.append(Page(
+                    number=page_num,
+                    text=extracted_texts.get(page_num, ""),
+                    metadata={}
+                ))
         
         print(f"📊 Total pages in document: {total_pages}")
         print(f"🚀 Starting extraction...\n")
@@ -170,12 +220,17 @@ class KnowledgeExtractionPipeline:
             for page in pages:
                 # Skip pages before start_page
                 if page.number < self.config.resume.start_page:
-                    print(f"⏭️  Skipping page {page.number}/{total_pages} (before start_page {self.config.resume.start_page})")
                     continue
                 
-                print(f"\n{'='*60}")
-                print(f"📄 Processing page {page.number}/{total_pages}")
-                print(f"{'='*60}")
+                is_external = page.metadata.get("external_chunks", False)
+                if is_external:
+                    print(f"\n{'='*60}")
+                    print(f"📄 Processing page {page.number}/{total_pages} (using external chunks)")
+                    print(f"{'='*60}")
+                else:
+                    print(f"\n{'='*60}")
+                    print(f"📄 Processing page {page.number}/{total_pages}")
+                    print(f"{'='*60}")
                     
                 page_results = self._process_page(page, doc_dir, total_pages)
                 results.extend(page_results)
@@ -202,48 +257,62 @@ class KnowledgeExtractionPipeline:
     def _process_page(self, page: Page, output_dir: str, total_pages: int) -> List[ExtractionResult]:
         """Process a single page."""
         results = []
+        chunks = None
+        is_generated = False
+        chunks_source = self.config.chunks_source_dir
         
-        # Segment into chunks based on granularity
-        print(f"  🔍 Segmenting page {page.number}...")
+        # Try to load chunks from external source first
+        if chunks_source:
+            chunks = self.file_utils.load_page_chunks(chunks_source, page.number)
+            if chunks:
+                print(f"  📂 Loaded {len(chunks)} chunks from external source")
         
-        if self.config.granularity == "sentence":
-            sentences = self.text_segmenter.segment(page.text)
-            chunks = sentences
-            print(f"     └─ Split into {len(chunks)} sentences")
-        elif self.config.granularity == "chunk":
-            # Try LLM segmentation first, fallback to NLTK on failure
-            sentences = page.text.split("\n")
-            print(f"     └─ Found {len(sentences)} lines, attempting LLM segmentation...")
+        # If no external chunks, generate from PDF
+        if chunks is None:
+            is_generated = True
+            # Segment into chunks based on granularity
+            print(f"  🔍 Segmenting page {page.number}...")
             
-            if sentences:
-                try:
-                    segmentation = self.sentence_extractor.segment(sentences)
-                    chunks = self.sentence_extractor.create_chunks(sentences, segmentation)
-                    print(f"     └─ ✓ LLM created {len(chunks)} logical chunks")
-                except Exception as e:
-                    # Fallback to NLTK sentence segmentation
-                    print(f"     ⚠️  LLM segmentation failed: {str(e)[:60]}...")
-                    print(f"     🔄 Falling back to NLTK sentence segmentation...")
-                    chunks = self.text_segmenter.segment(page.text)
-                    print(f"     └─ ✓ NLTK created {len(chunks)} sentence chunks")
-            else:
-                chunks = []
-                print(f"     └─ No content to process")
-        else:  # page
-            chunks = [page.text]
-            print(f"     └─ Processing as single page unit")
+            if self.config.granularity == "sentence":
+                sentences = self.text_segmenter.segment(page.text)
+                chunks = sentences
+                print(f"     └─ Split into {len(chunks)} sentences")
+            elif self.config.granularity == "chunk":
+                # Try LLM segmentation first, fallback to NLTK on failure
+                sentences = page.text.split("\n")
+                print(f"     └─ Found {len(sentences)} lines, attempting LLM segmentation...")
+                
+                if sentences:
+                    try:
+                        segmentation = self.sentence_extractor.segment(sentences)
+                        chunks = self.sentence_extractor.create_chunks(sentences, segmentation)
+                        print(f"     └─ ✓ LLM created {len(chunks)} logical chunks")
+                    except Exception as e:
+                        # Fallback to NLTK sentence segmentation
+                        print(f"     ⚠️  LLM segmentation failed: {str(e)[:60]}...")
+                        print(f"     🔄 Falling back to NLTK sentence segmentation...")
+                        chunks = self.text_segmenter.segment(page.text)
+                        print(f"     └─ ✓ NLTK created {len(chunks)} sentence chunks")
+                else:
+                    chunks = []
+                    print(f"     └─ No content to process")
+            else:  # page
+                chunks = [page.text]
+                print(f"     └─ Processing as single page unit")
         
-        # Save chunks to separate file
+        # Always save chunks to output directory (whether loaded or generated)
         self.file_utils.save_page_chunks(
             output_dir, page.number, chunks, self.config.granularity
         )
-        print(f"  💾 Saved {len(chunks)} chunks to pagina_{page.number}_chunks.json")
+        source_type = "external" if (chunks_source and not is_generated) else "generated"
+        print(f"  💾 Saved {len(chunks)} {source_type} chunks to pagina_{page.number}_chunks.json")
         
         page_data = {
-            "texto_original": page.text,
+            "texto_original": page.text if chunks is None or not chunks_source else f"[Chunks from {source_type} source]",
             "granularity": self.config.granularity,
             "tokenizer_language": self.config.tokenizer_language,
             "margins": self.config.margins,
+            "chunks_source": source_type,
             "sentence_results": [],
         }
         

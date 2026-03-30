@@ -72,6 +72,12 @@ def main():
         help="Directory with previous extraction results (for resuming)"
     )
     
+    # Chunks source options
+    parser.add_argument(
+        "--chunks-source",
+        help="Directory with pre-generated chunk JSON files (pagina_N_chunks.json). If chunks exist for a page, they will be used instead of extracting from PDF."
+    )
+    
     # Context control options
     parser.add_argument(
         "--no-definitions",
@@ -140,6 +146,11 @@ def main():
         previous_output_dir=args.previous_dir,
     )
     
+    # Strip quotes from chunks_source if present
+    chunks_source = args.chunks_source
+    if chunks_source:
+        chunks_source = chunks_source.strip('"\'')
+    
     config = PipelineConfig(
         model=model_config,
         embedding=embedding_config,
@@ -147,6 +158,7 @@ def main():
         output_dir=args.output,
         margins=tuple(args.margins) if args.margins else None,
         resume=resume_config,
+        chunks_source_dir=chunks_source,
     )
     
     # Run pipeline

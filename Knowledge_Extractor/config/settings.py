@@ -65,6 +65,9 @@ class PipelineConfig:
     # Resume configuration
     resume: ResumeConfig = field(default_factory=ResumeConfig)
     
+    # Source directory for pre-generated chunks (optional)
+    chunks_source_dir: Optional[str] = None
+    
     def __post_init__(self):
         if isinstance(self.model, dict):
             self.model = ModelConfig(**self.model)
