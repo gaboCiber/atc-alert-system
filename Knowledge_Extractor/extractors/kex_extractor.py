@@ -42,6 +42,12 @@ class KEXExtractor:
         self,
         text: str,
         context_entities: Optional[List[Dict[str, Any]]] = None,
+        context_definitions: Optional[List[Dict[str, Any]]] = None,
+        context_rules: Optional[List[Dict[str, Any]]] = None,
+        context_relationships: Optional[List[Dict[str, Any]]] = None,
+        include_definitions: bool = True,
+        include_rules: bool = True,
+        include_relationships: bool = True,
         last_ids: Optional[Dict[str, str]] = None
     ) -> Tuple[Optional[AeronauticalExtraction], str]:
         """
@@ -50,16 +56,28 @@ class KEXExtractor:
         Args:
             text: Text to analyze.
             context_entities: Previously extracted entities for context.
+            context_definitions: Previously extracted definitions for context.
+            context_rules: Previously extracted rules for context.
+            context_relationships: Previously extracted relationships for context.
+            include_definitions: Whether to include definitions in prompt.
+            include_rules: Whether to include rules in prompt.
+            include_relationships: Whether to include relationships in prompt.
             last_ids: Last used IDs for sequential numbering.
             
         Returns:
             Tuple of (AeronauticalExtraction or None, raw_llm_output).
             Always returns raw output even on failure for debugging.
         """
-        # Build prompts
+        # Build prompts with all context types
         system_prompt, user_prompt = build_kex_prompt(
             text=text,
             context_entities=context_entities,
+            context_definitions=context_definitions,
+            context_rules=context_rules,
+            context_relationships=context_relationships,
+            include_definitions=include_definitions,
+            include_rules=include_rules,
+            include_relationships=include_relationships,
             last_ids=last_ids
         )
         

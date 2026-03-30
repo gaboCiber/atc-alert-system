@@ -1,46 +1,41 @@
 """
-Context manager for entity embeddings and similarity-based selection.
+Context manager for multi-type embeddings and similarity-based selection.
+Manages entities, definitions, rules, and relationships with semantic retrieval.
 """
-import numpy as np
 from typing import List, Dict, Any, Optional
-from sentence_transformers import SentenceTransformer
+from ..config.settings import EmbeddingConfig
+from .context_store import VectorStore
 
 
 class ContextManager:
-    """Manages accumulated entities and provides semantic context selection."""
+    """Manages accumulated context items and provides semantic similarity-based selection."""
     
-    def __init__(
-        self,
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-        top_k: int = 50,
-        threshold: float = 0.1,
-        max_chars: int = 4000
-    ):
+    def __init__(self, config: Optional[EmbeddingConfig] = None):
         """
         Initialize context manager.
         
         Args:
-            model_name: Name of the sentence transformer model.
-            top_k: Maximum number of context entities to select.
-            threshold: Minimum similarity score for context selection.
-            max_chars: Maximum characters to use for embedding generation.
+            config: Embedding configuration. Uses defaults if not provided.
         """
-        self.model = SentenceTransformer(model_name)
-        self.top_k = top_k
-        self.threshold = threshold
-        self.max_chars = max_chars
+        self.config = config or EmbeddingConfig()
+        model_name = self.config.model_name
         
-        # Storage
-        self.entities_by_norm: Dict[str, Dict[str, Any]] = {}
-        self.entity_order: List[str] = []
-        self.embeddings: Optional[np.ndarray] = None
+        # Initialize separate stores for each context type
+        self.entity_store = VectorStore(model_name, self._build_entity_embed_text)
+        self.definition_store = VectorStore(model_name, self._build_definition_embed_text)
+        self.rule_store = VectorStore(model_name, self._build_rule_embed_text)
+        self.relationship_store = VectorStore(model_name, self._build_relationship_embed_text)
+        
+        # Store limits from config
+        self.threshold = self.config.threshold
+        self.max_chars = self.config.max_chars
     
-    def _normalize_text(self, text: str) -> str:
-        """Normalize text for deduplication."""
-        return (text or "").lower().strip()
+    # ==========================================
+    # Embedding Text Builders
+    # ==========================================
     
-    def _build_embed_text(self, entity: Dict[str, Any]) -> str:
-        """Build rich text representation for embedding."""
+    def _build_entity_embed_text(self, entity: Dict[str, Any]) -> str:
+        """Build rich text representation for entity embedding."""
         parts = []
         
         text = entity.get("text", "")
@@ -57,13 +52,6 @@ class ContextManager:
         if context:
             parts.append(f"context: {context}")
         
-        # Add attributes if present
-        attrs = entity.get("attributes", {})
-        if isinstance(attrs, dict):
-            for key in ["status", "phase", "role"]:
-                if attrs.get(key):
-                    parts.append(f"{key}: {attrs[key]}")
-        
         # Add aliases
         aliases = entity.get("aliases", [])
         if isinstance(aliases, list) and aliases:
@@ -71,102 +59,210 @@ class ContextManager:
         
         return " | ".join(parts).strip()
     
+    def _build_definition_embed_text(self, definition: Dict[str, Any]) -> str:
+        """Build text representation for definition embedding."""
+        parts = []
+        
+        term = definition.get("term", "")
+        def_text = definition.get("definition", "")
+        scope = definition.get("scope", "")
+        
+        if term:
+            parts.append(f"term: {term}")
+        if def_text:
+            parts.append(f"definition: {def_text}")
+        if scope:
+            parts.append(f"scope: {scope}")
+        
+        return " | ".join(parts).strip()
+    
+    def _build_rule_embed_text(self, rule: Dict[str, Any]) -> str:
+        """Build text representation for rule embedding."""
+        parts = []
+        
+        rule_type = rule.get("rule_type", "")
+        modality = rule.get("modality", "")
+        explainability = rule.get("explainability", "")
+        
+        # Extract trigger and constraint info
+        trigger = rule.get("trigger", {})
+        constraint = rule.get("constraint", {})
+        trigger_desc = trigger.get("description", "") if isinstance(trigger, dict) else ""
+        constraint_desc = constraint.get("description", "") if isinstance(constraint, dict) else ""
+        
+        if rule_type:
+            parts.append(f"type: {rule_type}")
+        if modality:
+            parts.append(f"modality: {modality}")
+        if trigger_desc:
+            parts.append(f"trigger: {trigger_desc}")
+        if constraint_desc:
+            parts.append(f"constraint: {constraint_desc}")
+        if explainability:
+            parts.append(f"purpose: {explainability}")
+        
+        return " | ".join(parts).strip()
+    
+    def _build_relationship_embed_text(self, relationship: Dict[str, Any]) -> str:
+        """Build text representation for relationship embedding."""
+        parts = []
+        
+        subject = relationship.get("subject_text", "")
+        predicate = relationship.get("predicate", "")
+        obj = relationship.get("object_text", "")
+        rel_type = relationship.get("relation_type", "")
+        
+        if subject and predicate and obj:
+            parts.append(f"{subject} {predicate} {obj}")
+        if rel_type:
+            parts.append(f"type: {rel_type}")
+        
+        return " | ".join(parts).strip()
+    
+    # ==========================================
+    # Add Methods
+    # ==========================================
+    
     def add_entities(self, entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Add new entities, avoiding duplicates.
-        
-        Args:
-            entities: List of entity dictionaries.
-            
-        Returns:
-            List of actually added entities (new ones only).
-        """
-        new_entities = []
-        
-        for entity in entities:
-            norm = self._normalize_text(entity.get("text", ""))
-            if not norm:
-                continue
-            
-            if norm not in self.entities_by_norm:
-                self.entities_by_norm[norm] = entity
-                self.entity_order.append(norm)
-                new_entities.append(entity)
-        
-        # Update embeddings for new entities
-        if new_entities:
-            self._update_embeddings(new_entities)
-        
-        return new_entities
+        """Add entities, avoiding duplicates."""
+        return self.entity_store.add_items(entities, lambda e: e.get("text", ""))
     
-    def _update_embeddings(self, new_entities: List[Dict[str, Any]]):
-        """Update embeddings matrix with new entities."""
-        texts = [self._build_embed_text(e) for e in new_entities]
-        new_embeddings = self.model.encode(texts, normalize_embeddings=False)
-        new_embeddings = np.atleast_2d(new_embeddings)
-        
-        if self.embeddings is None:
-            self.embeddings = new_embeddings
-        else:
-            self.embeddings = np.vstack([self.embeddings, new_embeddings])
+    def add_definitions(self, definitions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Add definitions, avoiding duplicates."""
+        return self.definition_store.add_items(definitions, lambda d: d.get("term", ""))
     
-    def select_context(self, text: str) -> List[Dict[str, Any]]:
+    def add_rules(self, rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Add rules, avoiding duplicates."""
+        # Use combination of rule_type and trigger description as key
+        def get_rule_key(rule):
+            trigger = rule.get("trigger", {})
+            trigger_desc = trigger.get("description", "") if isinstance(trigger, dict) else ""
+            return f"{rule.get('rule_type', '')}:{trigger_desc[:50]}"
+        return self.rule_store.add_items(rules, get_rule_key)
+    
+    def add_relationships(self, relationships: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Add relationships, avoiding duplicates."""
+        # Use subject+predicate+object as key
+        def get_rel_key(rel):
+            subj = rel.get("subject_text", "")
+            pred = rel.get("predicate", "")
+            obj = rel.get("object_text", "")
+            return f"{subj}:{pred}:{obj}"
+        return self.relationship_store.add_items(relationships, get_rel_key)
+    
+    # ==========================================
+    # Select Methods
+    # ==========================================
+    
+    def select_context(
+        self,
+        text: str,
+        include_entities: bool = True,
+        include_definitions: bool = True,
+        include_rules: bool = True,
+        include_relationships: bool = True
+    ) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Select context entities based on semantic similarity.
+        Select relevant context items based on semantic similarity.
         
         Args:
             text: Text to find relevant context for.
+            include_entities: Whether to include entities.
+            include_definitions: Whether to include definitions.
+            include_rules: Whether to include rules.
+            include_relationships: Whether to include relationships.
             
         Returns:
-            List of relevant entities, sorted by similarity.
+            Dictionary with selected items by type:
+            {
+                "entities": [...],
+                "definitions": [...],
+                "rules": [...],
+                "relationships": [...]
+            }
         """
-        if not self.entity_order or self.embeddings is None:
-            return []
+        result = {
+            "entities": [],
+            "definitions": [],
+            "rules": [],
+            "relationships": []
+        }
         
-        # Truncate text if too long
-        if len(text) > self.max_chars:
-            text = text[:self.max_chars]
+        if include_entities:
+            result["entities"] = self.entity_store.select_relevant(
+                text, self.config.top_k, self.threshold, self.max_chars
+            )
         
-        # Generate embedding for input text
-        text_embedding = self.model.encode(text, normalize_embeddings=False)
+        if include_definitions:
+            result["definitions"] = self.definition_store.select_relevant(
+                text, self.config.definition_top_k, self.threshold, self.max_chars
+            )
         
-        # Calculate cosine similarities
-        similarities = self._cosine_similarity(text_embedding, self.embeddings)
+        if include_rules:
+            result["rules"] = self.rule_store.select_relevant(
+                text, self.config.rule_top_k, self.threshold, self.max_chars
+            )
         
-        # Select top-k above threshold
-        selected = []
-        sorted_indices = np.argsort(-similarities)
+        if include_relationships:
+            result["relationships"] = self.relationship_store.select_relevant(
+                text, self.config.relationship_top_k, self.threshold, self.max_chars
+            )
         
-        for idx in sorted_indices[:self.top_k]:
-            sim = float(similarities[idx])
-            if sim < self.threshold:
-                break
-            norm = self.entity_order[idx]
-            selected.append(self.entities_by_norm[norm])
-        
-        return selected
+        return result
     
-    def _cosine_similarity(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
-        """Calculate cosine similarity between vector a and matrix b."""
-        norm_a = np.linalg.norm(a)
-        norms_b = np.linalg.norm(b, axis=1)
-        
-        # Avoid division by zero
-        denom = norm_a * norms_b
-        denom = np.where(denom == 0, 1e-12, denom)
-        
-        return (b @ a) / denom
+    # ==========================================
+    # Legacy Compatibility Methods
+    # ==========================================
+    
+    def select_entities(self, text: str) -> List[Dict[str, Any]]:
+        """Legacy method: select only entities (for backward compatibility)."""
+        return self.entity_store.select_relevant(
+            text, self.config.top_k, self.threshold, self.max_chars
+        )
+    
+    # ==========================================
+    # Getters
+    # ==========================================
     
     def get_all_entities(self) -> List[Dict[str, Any]]:
-        """Get all accumulated entities in order."""
-        return [self.entities_by_norm[norm] for norm in self.entity_order]
+        """Get all accumulated entities."""
+        return self.entity_store.get_all()
+    
+    def get_all_definitions(self) -> List[Dict[str, Any]]:
+        """Get all accumulated definitions."""
+        return self.definition_store.get_all()
+    
+    def get_all_rules(self) -> List[Dict[str, Any]]:
+        """Get all accumulated rules."""
+        return self.rule_store.get_all()
+    
+    def get_all_relationships(self) -> List[Dict[str, Any]]:
+        """Get all accumulated relationships."""
+        return self.relationship_store.get_all()
     
     def get_entity_count(self) -> int:
         """Get total number of accumulated entities."""
-        return len(self.entity_order)
+        return self.entity_store.get_count()
+    
+    def get_definition_count(self) -> int:
+        """Get total number of accumulated definitions."""
+        return self.definition_store.get_count()
+    
+    def get_rule_count(self) -> int:
+        """Get total number of accumulated rules."""
+        return self.rule_store.get_count()
+    
+    def get_relationship_count(self) -> int:
+        """Get total number of accumulated relationships."""
+        return self.relationship_store.get_count()
+    
+    # ==========================================
+    # Utility
+    # ==========================================
     
     def reset(self):
         """Clear all accumulated state."""
-        self.entities_by_norm.clear()
-        self.entity_order.clear()
-        self.embeddings = None
+        self.entity_store.reset()
+        self.definition_store.reset()
+        self.rule_store.reset()
+        self.relationship_store.reset()

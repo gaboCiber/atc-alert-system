@@ -28,7 +28,11 @@ class ExtractionResult:
     chunk_text: str
     extraction: Optional[Dict[str, Any]]
     raw_llm_output: Optional[str]
+    # All context types
     context_entities: List[Dict[str, Any]]
+    context_definitions: List[Dict[str, Any]]
+    context_rules: List[Dict[str, Any]]
+    context_relationships: List[Dict[str, Any]]
     last_ids: Dict[str, Optional[str]]
     error: Optional[str] = None
 
@@ -50,12 +54,7 @@ class KnowledgeExtractionPipeline:
         self.doc_processor = DocumentProcessor(margins=self.config.margins)
         self.text_segmenter = TextSegmenter(language=self.config.tokenizer_language)
         self.sentence_extractor = SentenceExtractor(config=self.config.model)
-        self.context_manager = ContextManager(
-            model_name=self.config.embedding.model_name,
-            top_k=self.config.embedding.top_k,
-            threshold=self.config.embedding.threshold,
-            max_chars=self.config.embedding.max_chars,
-        )
+        self.context_manager = ContextManager(config=self.config.embedding)
         self.kex_extractor = KEXExtractor(config=self.config.model)
         self.id_manager = IDManager()
         self.file_utils = FileUtils()
@@ -99,13 +98,20 @@ class KnowledgeExtractionPipeline:
                 if page_num >= self.config.resume.start_page:
                     continue
                 
-                # Load entities from sentence_results or directly from ner
+                # Load all context types from sentence_results
                 if "sentence_results" in data:
                     for chunk_data in data["sentence_results"]:
                         ner = chunk_data.get("ner", {})
                         if ner and isinstance(ner, dict):
                             entities = ner.get("entities", [])
+                            definitions = ner.get("definitions", [])
+                            rules = ner.get("rules", [])
+                            relationships = ner.get("relationships", [])
+                            
                             self.context_manager.add_entities(entities)
+                            self.context_manager.add_definitions(definitions)
+                            self.context_manager.add_rules(rules)
+                            self.context_manager.add_relationships(relationships)
                             loaded_entities += len(entities)
                             
                             # Update ID manager
@@ -251,43 +257,68 @@ class KnowledgeExtractionPipeline:
             )
             results.append(result)
             
-            # Update state
+            # Update state with all context types
             if result.extraction:
-                # Add entities to context manager
+                # Add all types to context manager
                 entities = result.extraction.get("entities", [])
-                relationships = result.extraction.get("relationships", [])
+                definitions = result.extraction.get("definitions", [])
                 rules = result.extraction.get("rules", [])
+                relationships = result.extraction.get("relationships", [])
                 events = result.extraction.get("events", [])
                 procedures = result.extraction.get("procedures", [])
-                definitions = result.extraction.get("definitions", [])
                 
                 self.context_manager.add_entities(entities)
+                self.context_manager.add_definitions(definitions)
+                self.context_manager.add_rules(rules)
+                self.context_manager.add_relationships(relationships)
                 
                 # Update ID manager
                 self.id_manager.update_from_extraction(result.extraction)
                 
                 # Log extraction results
                 total_extracted = len(entities) + len(relationships) + len(rules) + len(events) + len(procedures) + len(definitions)
-                print(f"✓ Extracted: {len(entities)}E, {len(relationships)}R, {len(rules)}RULE, {len(events)}EV, {len(procedures)}P, {len(definitions)}D")
+                print(f"✓ Extracted: {len(entities)}E, {len(definitions)}D, {len(rules)}RULE, {len(relationships)}R, {len(events)}EV, {len(procedures)}P")
             else:
                 error_msg = result.error or "Unknown error"
                 print(f"✗ Failed: {error_msg[:50]}..." if len(error_msg) > 50 else f"✗ Failed: {error_msg}")
             
-            # Build result data
+            # Build result data with all context types
             chunk_data = {
                 "chunk_text": chunk_text,
                 "ner": result.extraction,
                 "llm_output": result.raw_llm_output,
                 "context": {
                     "embedding_model": self.config.embedding.model_name,
-                    "top_k": self.config.embedding.top_k,
                     "threshold": self.config.embedding.threshold,
+                    # Entity context
                     "contexto_entidades_usadas": len(result.context_entities),
                     "contexto_entidades_seleccionadas": [
                         {"text": e.get("text"), "label": e.get("label")} 
                         for e in result.context_entities
                     ],
+                    # Definition context
+                    "contexto_definiciones_usadas": len(result.context_definitions),
+                    "contexto_definiciones_seleccionadas": [
+                        {"term": d.get("term"), "id": d.get("id")}
+                        for d in result.context_definitions
+                    ],
+                    # Rule context
+                    "contexto_reglas_usadas": len(result.context_rules),
+                    "contexto_reglas_seleccionadas": [
+                        {"type": r.get("rule_type"), "modality": r.get("modality"), "id": r.get("id")}
+                        for r in result.context_rules
+                    ],
+                    # Relationship context
+                    "contexto_relaciones_usadas": len(result.context_relationships),
+                    "contexto_relaciones_seleccionadas": [
+                        {"subject": rel.get("subject_text"), "predicate": rel.get("predicate"), "object": rel.get("object_text")}
+                        for rel in result.context_relationships
+                    ],
+                    # Totals
                     "entidades_acumuladas_total": self.context_manager.get_entity_count(),
+                    "definiciones_acumuladas_total": self.context_manager.get_definition_count(),
+                    "reglas_acumuladas_total": self.context_manager.get_rule_count(),
+                    "relaciones_acumuladas_total": self.context_manager.get_relationship_count(),
                     "last_ids": self.id_manager.get_all_ids(),
                 },
             }
@@ -309,20 +340,47 @@ class KnowledgeExtractionPipeline:
         chunk_text: str
     ) -> ExtractionResult:
         """Process a single text chunk."""
-        # Select context entities
-        context_entities = self.context_manager.select_context(chunk_text)
+        # Select all context types based on config
+        selected_context = self.context_manager.select_context(
+            chunk_text,
+            include_entities=True,
+            include_definitions=self.config.embedding.include_definitions,
+            include_rules=self.config.embedding.include_rules,
+            include_relationships=self.config.embedding.include_relationships
+        )
+        
+        context_entities = selected_context["entities"]
+        context_definitions = selected_context["definitions"]
+        context_rules = selected_context["rules"]
+        context_relationships = selected_context["relationships"]
         
         # Get last IDs
         last_ids = self.id_manager.get_all_ids()
         
         # Log context info
-        if context_entities:
-            print(f"(context: {len(context_entities)} entities)", end=" ")
+        total_context = len(context_entities) + len(context_definitions) + len(context_rules) + len(context_relationships)
+        if total_context > 0:
+            parts = []
+            if context_entities:
+                parts.append(f"{len(context_entities)}E")
+            if context_definitions:
+                parts.append(f"{len(context_definitions)}D")
+            if context_rules:
+                parts.append(f"{len(context_rules)}RULE")
+            if context_relationships:
+                parts.append(f"{len(context_relationships)}R")
+            print(f"(context: {', '.join(parts)})", end=" ")
         
         # Extract with KEX (always returns, even on failure)
         extraction, raw_output = self.kex_extractor.extract(
             text=chunk_text,
             context_entities=context_entities,
+            context_definitions=context_definitions,
+            context_rules=context_rules,
+            context_relationships=context_relationships,
+            include_definitions=self.config.embedding.include_definitions,
+            include_rules=self.config.embedding.include_rules,
+            include_relationships=self.config.embedding.include_relationships,
             last_ids=last_ids,
         )
         
@@ -339,6 +397,9 @@ class KnowledgeExtractionPipeline:
                 extraction=None,
                 raw_llm_output=raw_output,  # Always save for debugging
                 context_entities=context_entities,
+                context_definitions=context_definitions,
+                context_rules=context_rules,
+                context_relationships=context_relationships,
                 last_ids=last_ids,
                 error=error_msg,
             )
@@ -354,6 +415,9 @@ class KnowledgeExtractionPipeline:
             extraction=extraction_dict,
             raw_llm_output=raw_output,
             context_entities=context_entities,
+            context_definitions=context_definitions,
+            context_rules=context_rules,
+            context_relationships=context_relationships,
             last_ids=last_ids,
         )
     

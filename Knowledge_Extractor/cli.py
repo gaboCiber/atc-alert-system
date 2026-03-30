@@ -72,6 +72,46 @@ def main():
         help="Directory with previous extraction results (for resuming)"
     )
     
+    # Context control options
+    parser.add_argument(
+        "--no-definitions",
+        action="store_true",
+        help="Exclude definitions from context"
+    )
+    
+    parser.add_argument(
+        "--no-rules",
+        action="store_true",
+        help="Exclude rules from context"
+    )
+    
+    parser.add_argument(
+        "--no-relationships",
+        action="store_true",
+        help="Exclude relationships from context"
+    )
+    
+    parser.add_argument(
+        "--definition-limit",
+        type=int,
+        default=10,
+        help="Maximum definitions to include in context (default: 10)"
+    )
+    
+    parser.add_argument(
+        "--rule-limit",
+        type=int,
+        default=5,
+        help="Maximum rules to include in context (default: 5)"
+    )
+    
+    parser.add_argument(
+        "--relationship-limit",
+        type=int,
+        default=10,
+        help="Maximum relationships to include in context (default: 10)"
+    )
+    
     args = parser.parse_args()
     
     # Validate PDF exists
@@ -85,6 +125,15 @@ def main():
         base_url=args.base_url,
     )
     
+    embedding_config = EmbeddingConfig(
+        definition_top_k=args.definition_limit,
+        rule_top_k=args.rule_limit,
+        relationship_top_k=args.relationship_limit,
+        include_definitions=not args.no_definitions,
+        include_rules=not args.no_rules,
+        include_relationships=not args.no_relationships,
+    )
+    
     resume_config = ResumeConfig(
         start_page=args.start_page,
         load_previous_entities=args.resume or args.start_page > 1,
@@ -93,6 +142,7 @@ def main():
     
     config = PipelineConfig(
         model=model_config,
+        embedding=embedding_config,
         granularity=args.granularity,
         output_dir=args.output,
         margins=tuple(args.margins) if args.margins else None,
@@ -118,7 +168,10 @@ def main():
         print(f"  Total chunks: {len(results)}")
         print(f"  Successful: {successful}")
         print(f"  Failed: {failed}")
-        print(f"  Total entities accumulated: {pipeline.context_manager.get_entity_count()}")
+        print(f"  Entities accumulated: {pipeline.context_manager.get_entity_count()}")
+        print(f"  Definitions accumulated: {pipeline.context_manager.get_definition_count()}")
+        print(f"  Rules accumulated: {pipeline.context_manager.get_rule_count()}")
+        print(f"  Relationships accumulated: {pipeline.context_manager.get_relationship_count()}")
         
     except Exception as e:
         print(f"Error during extraction: {e}")

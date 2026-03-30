@@ -82,20 +82,64 @@ Now process the following sentences. Return only valid JSON covering ALL sentenc
 def build_kex_prompt(
     text: str,
     context_entities: Optional[list] = None,
+    context_definitions: Optional[list] = None,
+    context_rules: Optional[list] = None,
+    context_relationships: Optional[list] = None,
+    include_definitions: bool = True,
+    include_rules: bool = True,
+    include_relationships: bool = True,
     last_ids: Optional[dict] = None
 ) -> Tuple[str, str]:
-    """Build the complete prompt for KEX extraction."""
+    """Build the complete prompt for KEX extraction with all context types."""
     
-    # Build context section
-    context_section = ""
+    # Build context section with all types
+    context_parts = []
+    
     if context_entities:
-        context_section = "[Previously Extracted Entities]:\n"
+        entity_lines = ["[Previously Extracted Entities]:"]
         for ent in context_entities:
             if isinstance(ent, dict):
                 ent_id = ent.get("id", "")
                 ent_text = ent.get("text", "")
                 ent_label = ent.get("label", "Unknown")
-                context_section += f"- ID: {ent_id}, Text: {ent_text}, Label: {ent_label}\n"
+                entity_lines.append(f"- ID: {ent_id}, Text: {ent_text}, Label: {ent_label}")
+        context_parts.append("\n".join(entity_lines))
+    
+    if include_definitions and context_definitions:
+        def_lines = ["[Previously Extracted Definitions]:"]
+        for d in context_definitions:
+            if isinstance(d, dict):
+                d_id = d.get("id", "")
+                term = d.get("term", "")
+                definition = d.get("definition", "")[:100]  # Truncate long definitions
+                def_lines.append(f"- ID: {d_id}, Term: {term}, Definition: {definition}...")
+        context_parts.append("\n".join(def_lines))
+    
+    if include_rules and context_rules:
+        rule_lines = ["[Previously Extracted Rules]:"]
+        for r in context_rules:
+            if isinstance(r, dict):
+                r_id = r.get("id", "")
+                rule_type = r.get("rule_type", "")
+                modality = r.get("modality", "")
+                trigger = r.get("trigger", {})
+                trigger_desc = trigger.get("description", "")[:80] if isinstance(trigger, dict) else ""
+                rule_lines.append(f"- ID: {r_id}, Type: {rule_type}, Modality: {modality}, Trigger: {trigger_desc}...")
+        context_parts.append("\n".join(rule_lines))
+    
+    if include_relationships and context_relationships:
+        rel_lines = ["[Previously Extracted Relationships]:"]
+        for rel in context_relationships:
+            if isinstance(rel, dict):
+                rel_id = rel.get("id", "")
+                subj = rel.get("subject_text", "")
+                pred = rel.get("predicate", "")
+                obj = rel.get("object_text", "")
+                rel_type = rel.get("relation_type", "")
+                rel_lines.append(f"- ID: {rel_id}, {subj} {pred} {obj} (Type: {rel_type})")
+        context_parts.append("\n".join(rel_lines))
+    
+    context_section = "\n\n".join(context_parts) if context_parts else ""
     
     # Build last IDs section
     last_ids_section = ""

@@ -17,11 +17,21 @@ class ModelConfig:
 
 @dataclass
 class EmbeddingConfig:
-    """Configuration for sentence embeddings."""
+    """Configuration for sentence embeddings and context selection."""
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
-    top_k: int = 50
+    top_k: int = 50  # entities (backward compatible)
     threshold: float = 0.1
     max_chars: int = 4000
+    
+    # New: context type limits (conservative defaults)
+    definition_top_k: int = 10
+    rule_top_k: int = 5
+    relationship_top_k: int = 10
+    
+    # New: enable/disable flags (all True by default)
+    include_definitions: bool = True
+    include_rules: bool = True
+    include_relationships: bool = True
 
 
 @dataclass
