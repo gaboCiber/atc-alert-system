@@ -57,6 +57,36 @@ python -m Knowledge_Extractor document.pdf -g page
 python -m Knowledge_Extractor document.pdf -g chunk
 ```
 
+#### LLM Provider Configuration
+
+Use different LLM providers (Ollama, OpenAI, Gemini native, Anthropic):
+
+```bash
+# Ollama (default - openai provider)
+python -m Knowledge_Extractor document.pdf -m llama3.2
+
+# OpenAI
+python -m Knowledge_Extractor document.pdf -m gpt-4o --provider openai --api-key $OPENAI_API_KEY
+
+# Gemini (native API - uses instructor.from_gemini)
+python -m Knowledge_Extractor document.pdf -m gemini-1.5-flash --provider gemini --api-key $GEMINI_API_KEY
+
+# Gemini (OpenAI-compatible endpoint - still uses openai provider)
+python -m Knowledge_Extractor document.pdf -m gemini-1.5-flash --base-url https://generativelanguage.googleapis.com/v1beta/openai/ --api-key $GEMINI_API_KEY
+
+# Anthropic/Claude
+python -m Knowledge_Extractor document.pdf -m claude-3-sonnet-20240229 --provider anthropic --api-key $ANTHROPIC_API_KEY
+```
+
+**Note**: Install optional dependencies for native providers:
+```bash
+# For Gemini native support
+pip install google-generativeai
+
+# For Anthropic support
+pip install anthropic
+```
+
 #### Context Control
 
 Control which context types are included in the extraction prompt:
@@ -89,11 +119,36 @@ python -m Knowledge_Extractor document.pdf --chunks-source "chunks_dir/" --start
 
 **Note**: When `--chunks-source` is provided, pages with existing chunk files (`pagina_N_chunks.json`) will skip PDF text extraction entirely and use the external chunks. All chunks (external or generated) are saved to the output directory.
 
-#### Resume from Specific Page
+#### Chunk-Only Mode
+
+Extract and save chunks without running KEX extraction:
+
+```bash
+# Extract only chunks, skip KEX
+python -m Knowledge_Extractor document.pdf --chunk-only -o chunks_output/
+
+# Combine with chunk granularity
+python -m Knowledge_Extractor document.pdf --chunk-only -g chunk -o chunks_output/
+
+# Reorganize chunks from external source
+python -m Knowledge_Extractor document.pdf --chunk-only --chunks-source "existing_chunks/" -o "new_chunks/"
+```
+
+**Note**: In chunk-only mode, only `pagina_N_chunks.json` files are created. The full extraction results (`pagina_N.json`) can be generated later using `--chunks-source` flag.
+
+#### Resume from Specific Page / Page Range
+
+Process a specific page range instead of the entire document:
 
 ```bash
 # Start from page 5, loading entities from pages 1-4
 python -m Knowledge_Extractor document.pdf --start-page 5 --resume
+
+# Process only pages 5-10
+python -m Knowledge_Extractor document.pdf --start-page 5 --final-page 10
+
+# Process up to page 3 only
+python -m Knowledge_Extractor document.pdf --final-page 3
 
 # Resume using different directory for previous results
 python -m Knowledge_Extractor document.pdf --start-page 10 --previous-dir output/old_run/
@@ -194,8 +249,10 @@ Each page generates a JSON file (`pagina_N.json`):
 ## Configuration
 
 ### Model Settings
-- `name`: Ollama model (default: llama3.2)
-- `base_url`: Ollama API endpoint
+- `name`: LLM model name (default: llama3.2)
+- `provider`: LLM provider type - "openai", "gemini", or "anthropic" (default: openai)
+- `base_url`: API base URL for OpenAI-compatible providers (default: http://localhost:11434/v1 for Ollama)
+- `api_key`: API key for authentication (default: ollama)
 - `max_retries`: Retry attempts for failed extractions
 
 ### Embedding Settings

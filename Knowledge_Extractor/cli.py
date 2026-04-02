@@ -42,7 +42,20 @@ def main():
     parser.add_argument(
         "--base-url",
         default="http://localhost:11434/v1",
-        help="Ollama API base URL"
+        help="API base URL for OpenAI-compatible providers (Ollama, etc.)"
+    )
+    
+    parser.add_argument(
+        "--provider",
+        choices=["openai", "gemini", "anthropic"],
+        default="openai",
+        help="LLM provider type (default: openai). Use 'gemini' for native Gemini API."
+    )
+    
+    parser.add_argument(
+        "--api-key",
+        default="ollama",
+        help="API key for LLM service (default: ollama)"
     )
     
     parser.add_argument(
@@ -59,6 +72,13 @@ def main():
         type=int,
         default=1,
         help="Page to start processing from (1-indexed, default: 1)"
+    )
+    
+    parser.add_argument(
+        "--final-page",
+        type=int,
+        default=None,
+        help="Page to end processing at (inclusive). If not set, processes all remaining pages."
     )
     
     parser.add_argument(
@@ -134,7 +154,9 @@ def main():
     # Build config
     model_config = ModelConfig(
         name=args.model,
+        provider=args.provider,
         base_url=args.base_url,
+        api_key=args.api_key,
     )
     
     embedding_config = EmbeddingConfig(
@@ -148,6 +170,7 @@ def main():
     
     resume_config = ResumeConfig(
         start_page=args.start_page,
+        final_page=args.final_page,
         load_previous_entities=args.resume or args.start_page > 1,
         previous_output_dir=args.previous_dir,
     )

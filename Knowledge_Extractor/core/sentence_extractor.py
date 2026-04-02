@@ -8,6 +8,7 @@ from typing import List, Optional
 from ..schemas.sentence_schemas import SegmentationOutput, LogicalChunk
 from ..config.settings import ModelConfig
 from ..config.prompts import SENTENCE_SEGMENTATION_PROMPT
+from ..extractors.llm_client_factory import create_instructor_client
 
 
 class SentenceExtractor:
@@ -22,14 +23,8 @@ class SentenceExtractor:
         """
         self.config = config or ModelConfig()
         
-        # Initialize Instructor client
-        self.client = instructor.from_openai(
-            OpenAI(
-                base_url=self.config.base_url,
-                api_key=self.config.api_key,
-            ),
-            mode=instructor.Mode.JSON_SCHEMA,
-        )
+        # Initialize appropriate instructor client based on provider
+        self.client, self.mode = create_instructor_client(self.config)
     
     def segment(
         self,

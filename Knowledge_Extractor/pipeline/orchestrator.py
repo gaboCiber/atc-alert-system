@@ -224,6 +224,11 @@ class KnowledgeExtractionPipeline:
                 if page.number < self.config.resume.start_page:
                     continue
                 
+                # Stop at final_page if specified
+                if self.config.resume.final_page and page.number > self.config.resume.final_page:
+                    print(f"\n⏹️  Reached final page ({self.config.resume.final_page}), stopping.")
+                    break
+                
                 is_external = page.metadata.get("external_chunks", False)
                 if is_external:
                     print(f"\n{'='*60}")

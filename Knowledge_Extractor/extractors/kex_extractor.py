@@ -9,6 +9,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from ..schemas.kex_schemas import AeronauticalExtraction
 from ..config.settings import ModelConfig
 from ..config.prompts import build_kex_prompt
+from .llm_client_factory import create_instructor_client, create_raw_client
 
 
 class KEXExtractor:
@@ -23,20 +24,11 @@ class KEXExtractor:
         """
         self.config = config or ModelConfig()
         
-        # Initialize Instructor client
-        self.client = instructor.from_openai(
-            OpenAI(
-                base_url=self.config.base_url,
-                api_key=self.config.api_key,
-            ),
-            mode=instructor.Mode.JSON_SCHEMA,
-        )
+        # Initialize appropriate instructor client based on provider
+        self.client, self.mode = create_instructor_client(self.config)
         
-        # Raw OpenAI client for fallback raw extraction
-        self.raw_client = OpenAI(
-            base_url=self.config.base_url,
-            api_key=self.config.api_key,
-        )
+        # Raw client for fallback extraction
+        self.raw_client = create_raw_client(self.config)
     
     def extract(
         self,
@@ -102,15 +94,19 @@ class KEXExtractor:
             # Structured extraction failed after all retries
             # Get raw output for debugging
             try:
-                raw_response = self.raw_client.chat.completions.create(
-                    model=self.config.name,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    temperature=0.0,
-                )
-                raw_output = raw_response.choices[0].message.content or "No content in response"
+                # Check if raw fallback is available
+                if self.raw_client:
+                    raw_response = self.raw_client.chat.completions.create(
+                        model=self.config.name,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        temperature=0.0,
+                    )
+                    raw_output = raw_response.choices[0].message.content or "No content in response"
+                else:
+                    raw_output = "Raw fallback not available for this provider"
             except Exception as raw_e:
                 raw_output = f"Failed to get raw output: {str(raw_e)}"
             

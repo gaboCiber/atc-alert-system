@@ -9,6 +9,7 @@ from typing import Optional, Tuple, Literal
 class ModelConfig:
     """Configuration for LLM models."""
     name: str = "llama3.2"
+    provider: Literal["openai", "gemini", "anthropic"] = "openai"
     base_url: str = "http://localhost:11434/v1"
     api_key: str = "ollama"
     max_retries: int = 3
@@ -38,6 +39,7 @@ class EmbeddingConfig:
 class ResumeConfig:
     """Configuration for resuming extraction from previous state."""
     start_page: int = 1  # Page to start from (1-indexed)
+    final_page: Optional[int] = None  # Page to end at (inclusive), None = process all
     load_previous_entities: bool = True  # Load entities from previous runs
     previous_output_dir: Optional[str] = None  # Directory with previous results
 
