@@ -68,6 +68,9 @@ class PipelineConfig:
     # Source directory for pre-generated chunks (optional)
     chunks_source_dir: Optional[str] = None
     
+    # Chunk-only mode (skip KEX extraction, only extract and save chunks)
+    chunk_only: bool = False
+    
     def __post_init__(self):
         if isinstance(self.model, dict):
             self.model = ModelConfig(**self.model)

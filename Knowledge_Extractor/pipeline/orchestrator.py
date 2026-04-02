@@ -212,6 +212,8 @@ class KnowledgeExtractionPipeline:
                 ))
         
         print(f"📊 Total pages in document: {total_pages}")
+        if self.config.chunk_only:
+            print(f"📝 CHUNK-ONLY MODE: Skipping KEX extraction")
         print(f"🚀 Starting extraction...\n")
         
         results = []
@@ -232,14 +234,23 @@ class KnowledgeExtractionPipeline:
                     print(f"📄 Processing page {page.number}/{total_pages}")
                     print(f"{'='*60}")
                     
-                page_results = self._process_page(page, doc_dir, total_pages)
+                if self.config.chunk_only:
+                    # Chunk-only mode: extract and save chunks only, skip KEX
+                    page_results = self._process_page_chunks_only(page, doc_dir, total_pages)
+                else:
+                    # Normal mode: full processing with KEX
+                    page_results = self._process_page(page, doc_dir, total_pages)
+                
                 results.extend(page_results)
                 self.state.processed_pages += 1
                 
                 # Progress summary after each page
-                print(f"\n✅ Page {page.number} complete - {len(page_results)} chunks processed")
-                print(f"📊 Total entities accumulated: {self.context_manager.get_entity_count()}")
-                print(f"🔢 Current IDs: {self.id_manager.get_all_ids()}")
+                if self.config.chunk_only:
+                    print(f"\n✅ Page {page.number} complete - chunks saved")
+                else:
+                    print(f"\n✅ Page {page.number} complete - {len(page_results)} chunks processed")
+                    print(f"📊 Total entities accumulated: {self.context_manager.get_entity_count()}")
+                    print(f"🔢 Current IDs: {self.id_manager.get_all_ids()}")
                 
         finally:
             print(f"\n{'='*60}")
@@ -254,9 +265,14 @@ class KnowledgeExtractionPipeline:
         
         return results
     
-    def _process_page(self, page: Page, output_dir: str, total_pages: int) -> List[ExtractionResult]:
-        """Process a single page."""
-        results = []
+    def _extract_and_save_chunks(self, page: Page, output_dir: str) -> tuple:
+        """
+        Extract chunks for a page (from external source or generate from PDF)
+        and save them to the output directory.
+        
+        Returns:
+            Tuple of (chunks, source_type) where source_type is "external" or "generated"
+        """
         chunks = None
         is_generated = False
         chunks_source = self.config.chunks_source_dir
@@ -270,15 +286,12 @@ class KnowledgeExtractionPipeline:
         # If no external chunks, generate from PDF
         if chunks is None:
             is_generated = True
-            # Segment into chunks based on granularity
             print(f"  🔍 Segmenting page {page.number}...")
             
             if self.config.granularity == "sentence":
-                sentences = self.text_segmenter.segment(page.text)
-                chunks = sentences
+                chunks = self.text_segmenter.segment(page.text)
                 print(f"     └─ Split into {len(chunks)} sentences")
             elif self.config.granularity == "chunk":
-                # Try LLM segmentation first, fallback to NLTK on failure
                 sentences = page.text.split("\n")
                 print(f"     └─ Found {len(sentences)} lines, attempting LLM segmentation...")
                 
@@ -307,8 +320,28 @@ class KnowledgeExtractionPipeline:
         source_type = "external" if (chunks_source and not is_generated) else "generated"
         print(f"  💾 Saved {len(chunks)} {source_type} chunks to pagina_{page.number}_chunks.json")
         
+        # Update chunk count in state
+        self.state.processed_chunks += len(chunks)
+        
+        return chunks, source_type
+    
+    def _process_page_chunks_only(self, page: Page, output_dir: str, total_pages: int) -> List[ExtractionResult]:
+        """Process page in chunk-only mode - extract and save chunks without KEX."""
+        chunks, source_type = self._extract_and_save_chunks(page, output_dir)
+        
+        # Return empty list - no extraction performed in chunk-only mode
+        return []
+    
+    def _process_page(self, page: Page, output_dir: str, total_pages: int) -> List[ExtractionResult]:
+        """Process a single page with full KEX extraction."""
+        results = []
+        
+        # Extract and save chunks (handles both external and generated)
+        chunks, source_type = self._extract_and_save_chunks(page, output_dir)
+        
+        # Build page data for output (only in full mode)
         page_data = {
-            "texto_original": page.text if chunks is None or not chunks_source else f"[Chunks from {source_type} source]",
+            "texto_original": page.text if not self.config.chunks_source_dir else f"[Chunks from {source_type} source]",
             "granularity": self.config.granularity,
             "tokenizer_language": self.config.tokenizer_language,
             "margins": self.config.margins,

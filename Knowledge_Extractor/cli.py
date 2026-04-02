@@ -78,6 +78,12 @@ def main():
         help="Directory with pre-generated chunk JSON files (pagina_N_chunks.json). If chunks exist for a page, they will be used instead of extracting from PDF."
     )
     
+    parser.add_argument(
+        "--chunk-only",
+        action="store_true",
+        help="Extract and save chunks only, skip KEX extraction"
+    )
+    
     # Context control options
     parser.add_argument(
         "--no-definitions",
@@ -159,6 +165,7 @@ def main():
         margins=tuple(args.margins) if args.margins else None,
         resume=resume_config,
         chunks_source_dir=chunks_source,
+        chunk_only=args.chunk_only,
     )
     
     # Run pipeline
