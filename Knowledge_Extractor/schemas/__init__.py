@@ -6,7 +6,6 @@ from .kex_schemas import (
     Event,
     Rule,
     Procedure,
-    Definition,
 )
 
 from .sentence_schemas import (
@@ -21,7 +20,6 @@ __all__ = [
     "Event",
     "Rule",
     "Procedure",
-    "Definition",
     "SegmentationOutput",
     "LogicalChunk",
 ]

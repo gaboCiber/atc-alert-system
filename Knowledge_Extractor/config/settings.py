@@ -24,13 +24,11 @@ class EmbeddingConfig:
     threshold: float = 0.1
     max_chars: int = 4000
     
-    # New: context type limits (conservative defaults)
-    definition_top_k: int = 10
+    # Context type limits (conservative defaults)
     rule_top_k: int = 5
     relationship_top_k: int = 10
     
-    # New: enable/disable flags (all True by default)
-    include_definitions: bool = True
+    # Enable/disable flags
     include_rules: bool = True
     include_relationships: bool = True
 

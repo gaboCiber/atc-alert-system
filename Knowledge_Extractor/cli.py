@@ -106,12 +106,6 @@ def main():
     
     # Context control options
     parser.add_argument(
-        "--no-definitions",
-        action="store_true",
-        help="Exclude definitions from context"
-    )
-    
-    parser.add_argument(
         "--no-rules",
         action="store_true",
         help="Exclude rules from context"
@@ -121,13 +115,6 @@ def main():
         "--no-relationships",
         action="store_true",
         help="Exclude relationships from context"
-    )
-    
-    parser.add_argument(
-        "--definition-limit",
-        type=int,
-        default=10,
-        help="Maximum definitions to include in context (default: 10)"
     )
     
     parser.add_argument(
@@ -160,10 +147,8 @@ def main():
     )
     
     embedding_config = EmbeddingConfig(
-        definition_top_k=args.definition_limit,
         rule_top_k=args.rule_limit,
         relationship_top_k=args.relationship_limit,
-        include_definitions=not args.no_definitions,
         include_rules=not args.no_rules,
         include_relationships=not args.no_relationships,
     )
@@ -211,7 +196,6 @@ def main():
         print(f"  Successful: {successful}")
         print(f"  Failed: {failed}")
         print(f"  Entities accumulated: {pipeline.context_manager.get_entity_count()}")
-        print(f"  Definitions accumulated: {pipeline.context_manager.get_definition_count()}")
         print(f"  Rules accumulated: {pipeline.context_manager.get_rule_count()}")
         print(f"  Relationships accumulated: {pipeline.context_manager.get_relationship_count()}")
         

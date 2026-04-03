@@ -7,23 +7,28 @@ KEX_SYSTEM_PROMPT = """You are an expert Air Traffic Control (ATC) knowledge ext
 Extract ALL instances of aeronautical entities and their operational relationships.
 
 [Specify Constraints]:
-1. STRICT ID CROSS-REFERENCING: Every item must have a unique ID (E001, R001, EV001, RULE001, P001, D001).
+1. STRICT ID CROSS-REFERENCING: Every item must have a unique ID (E001, R001, EV001, RULE001, P001).
    Use these exact IDs when referencing entities inside relationships or rules.
 2. ONTOLOGICAL SEPARATION:
-   - "entities": Physical objects, roles, or abstract concepts.
+   - "entities": Physical objects, roles, or abstract concepts. For formal definitions provided by the document, use the formal_definition field.
    - "relationships": Static or structural connections.
    - "events": Dynamic actions happening in time.
    - "procedures": Step-by-step ordered workflows.
-   - "definitions": Glossary terms.
    - "rules": Deontic constraints and obligations.
 3. RULE EXTRACTION: Map modal verbs (shall, must, may) to correct modality.
    Separate trigger_condition from action_constraint.
 4. FORMAL LOGIC: Generate pseudo-code for formal_if_then (e.g., "aircraft_visible == true").
 5. DOMAIN FOCUS: Restrict to ATC operations, flight constraints, and safety procedures.
 6. DYNAMIC DISCOVERY: Extract any domain-specific entity impacting flight operations.
+
+FORMAL DEFINITION FIELD:
+- Only populate entity.formal_definition when the document EXPLICITLY defines the term.
+- Example: "Taxi clearance means an authorization to taxi..." → entity.text="Taxi clearance", formal_definition="an authorization to taxi..."
+- If the term is just mentioned/used, leave formal_definition as null.
+- The formal_definition should be the EXACT or NEAR-EXACT text from the document.
 """
 
-KEX_USER_PROMPT_TEMPLATE = """Extract entities, relationships, events, rules, procedures, and definitions from the following text.
+KEX_USER_PROMPT_TEMPLATE = """Extract entities, relationships, events, rules, and procedures from the following text.
 
 {context_section}
 
@@ -82,17 +87,15 @@ Now process the following sentences. Return only valid JSON covering ALL sentenc
 def build_kex_prompt(
     text: str,
     context_entities: Optional[list] = None,
-    context_definitions: Optional[list] = None,
     context_rules: Optional[list] = None,
     context_relationships: Optional[list] = None,
-    include_definitions: bool = True,
     include_rules: bool = True,
     include_relationships: bool = True,
     last_ids: Optional[dict] = None
 ) -> Tuple[str, str]:
-    """Build the complete prompt for KEX extraction with all context types."""
+    """Build the complete prompt for KEX extraction with context types."""
     
-    # Build context section with all types
+    # Build context section with types
     context_parts = []
     
     if context_entities:
@@ -104,16 +107,6 @@ def build_kex_prompt(
                 ent_label = ent.get("label", "Unknown")
                 entity_lines.append(f"- ID: {ent_id}, Text: {ent_text}, Label: {ent_label}")
         context_parts.append("\n".join(entity_lines))
-    
-    if include_definitions and context_definitions:
-        def_lines = ["[Previously Extracted Definitions]:"]
-        for d in context_definitions:
-            if isinstance(d, dict):
-                d_id = d.get("id", "")
-                term = d.get("term", "")
-                definition = d.get("definition", "")[:100]  # Truncate long definitions
-                def_lines.append(f"- ID: {d_id}, Term: {term}, Definition: {definition}...")
-        context_parts.append("\n".join(def_lines))
     
     if include_rules and context_rules:
         rule_lines = ["[Previously Extracted Rules]:"]

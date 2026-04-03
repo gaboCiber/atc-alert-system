@@ -6,7 +6,7 @@ from typing import Dict, Optional, List, Any
 
 
 class IDManager:
-    """Manages sequential IDs for entities, relationships, events, rules, procedures, definitions."""
+    """Manages sequential IDs for entities, relationships, events, rules, procedures."""
     
     # ID prefixes for each category
     PREFIXES = {
@@ -15,7 +15,6 @@ class IDManager:
         "events": "EV",
         "rules": "RULE",
         "procedures": "P",
-        "definitions": "D",
     }
     
     def __init__(self):

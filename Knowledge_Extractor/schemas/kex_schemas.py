@@ -110,6 +110,10 @@ class Entity(BaseModel):
     subtype: Optional[str] = Field(None, description="More specific classification (e.g., active)")
     aliases: List[str] = Field(default_factory=list, description="List of synonyms or alternative phrasings")
     context: str = Field(..., description="Brief semantic description")
+    formal_definition: Optional[str] = Field(
+        None,
+        description="Formal definition provided by the document for this term (only when explicitly defined, e.g., 'Term X means Y...')"
+    )
 
 class Relationship(BaseModel):
     id: str = Field(..., description="UNIQUE_ID (e.g., R001)")
@@ -159,13 +163,6 @@ class Procedure(BaseModel):
     exceptions: List[str] = Field(default_factory=list, description="Conditions where procedure is aborted")
     linked_rules: List[str] = Field(default_factory=list, description="Rule IDs governing this procedure")
 
-class Definition(BaseModel):
-    id: str = Field(..., description="UNIQUE_ID (e.g., D001)")
-    term: str = Field(..., description="The term being defined")
-    definition: str = Field(..., description="The exact definition provided in the text")
-    scope: Optional[str] = Field(None, description="Where this definition applies")
-    linked_entities: List[str] = Field(default_factory=list, description="Entity IDs associated")
-
 # ==========================================
 # ROOT MODEL (Lo que retorna el LLM)
 # ==========================================
@@ -179,4 +176,4 @@ class AeronauticalExtraction(BaseModel):
     events: List[Event] = Field(default_factory=list)
     rules: List[Rule] = Field(default_factory=list)
     procedures: List[Procedure] = Field(default_factory=list)
-    definitions: List[Definition] = Field(default_factory=list)
+    # Note: definitions removed - use entity.formal_definition for explicit document definitions

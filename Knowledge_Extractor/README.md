@@ -7,10 +7,10 @@ Extract aeronautical knowledge (entities, relationships, rules, procedures) from
 - **PDF Text Extraction** with custom margins (PyMuPDF)
 - **Three Granularity Levels**: page, sentence, chunk (NLTK + LLM segmentation)
 - **Context-aware Extraction** with semantic embeddings (sentence-transformers)
-- **Expanded Context Types**: Entities, Definitions, Rules, and Relationships for richer context
+- **Expanded Context Types**: Entities, Rules, and Relationships for richer context
 - **External Chunks Source**: Load pre-generated chunks from another folder
 - **Resume Capability**: Start from specific page with previous entities as context
-- **Sequential ID Management**: E001, R001, RULE001, EV001, P001, D001
+- **Sequential ID Management**: E001, R001, RULE001, EV001, P001
 - **Structured Output** via Pydantic/Instructor with automatic validation
 - **Memory Management**: Automatic Ollama model unloading after processing
 - **Granular Processing**: Process by page, sentence, or logical chunks
@@ -96,10 +96,10 @@ Control which context types are included in the extraction prompt:
 python -m Knowledge_Extractor document.pdf
 
 # Exclude specific types
-python -m Knowledge_Extractor document.pdf --no-definitions --no-rules
+python -m Knowledge_Extractor document.pdf --no-rules --no-relationships
 
 # Adjust context limits per type
-python -m Knowledge_Extractor document.pdf --definition-limit 20 --rule-limit 10 --relationship-limit 15
+python -m Knowledge_Extractor document.pdf --rule-limit 10 --relationship-limit 15
 ```
 
 #### External Chunks Source
@@ -186,10 +186,8 @@ from Knowledge_Extractor.pipeline.orchestrator import KnowledgeExtractionPipelin
 
 # Configure expanded context
 embedding_config = EmbeddingConfig(
-    definition_top_k=10,
     rule_top_k=5,
     relationship_top_k=10,
-    include_definitions=True,
     include_rules=True,
     include_relationships=True,
 )
@@ -214,7 +212,6 @@ results = pipeline.process("document.pdf")
 
 print(f"Processed {pipeline.state.processed_pages} pages")
 print(f"Accumulated {pipeline.context_manager.get_entity_count()} entities")
-print(f"Accumulated {pipeline.context_manager.get_definition_count()} definitions")
 print(f"Accumulated {pipeline.context_manager.get_rule_count()} rules")
 print(f"Accumulated {pipeline.context_manager.get_relationship_count()} relationships")
 ```
@@ -259,10 +256,8 @@ Each page generates a JSON file (`pagina_N.json`):
 - `model_name`: sentence-transformers model
 - `top_k`: Number of context entities to select
 - `threshold`: Similarity threshold for context selection
-- `definition_top_k`: Max definitions in context (default: 10)
 - `rule_top_k`: Max rules in context (default: 5)
 - `relationship_top_k`: Max relationships in context (default: 10)
-- `include_definitions`: Include definitions in context (default: True)
 - `include_rules`: Include rules in context (default: True)
 - `include_relationships`: Include relationships in context (default: True)
 
@@ -283,7 +278,6 @@ The system extracts:
 - **Events**: Runway crossing, clearance issued, etc.
 - **Rules**: Obligations, prohibitions, permissions with formal logic
 - **Procedures**: Step-by-step workflows
-- **Definitions**: Glossary terms
 
 All with unique IDs and cross-referencing.
 
