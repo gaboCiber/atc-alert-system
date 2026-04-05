@@ -17,6 +17,7 @@ from ..extractors.kex_extractor import KEXExtractor
 from ..extractors.json_parser import JSONParser
 from ..utils.id_manager import IDManager
 from ..utils.file_utils import FileUtils
+from ..utils.post_processor import ExtractionPostProcessor, save_errors_to_file
 from .state import PipelineState
 
 
@@ -34,6 +35,8 @@ class ExtractionResult:
     context_relationships: List[Dict[str, Any]]
     last_ids: Dict[str, Optional[str]]
     error: Optional[str] = None
+    post_processing_errors: List[Dict[str, Any]] = None
+    post_process_message: str = ""
 
 
 class KnowledgeExtractionPipeline:
@@ -57,6 +60,7 @@ class KnowledgeExtractionPipeline:
         self.kex_extractor = KEXExtractor(config=self.config.model)
         self.id_manager = IDManager()
         self.file_utils = FileUtils()
+        self.post_processor = ExtractionPostProcessor()
     
     def _load_previous_state(self, doc_dir: str):
         """
@@ -379,7 +383,9 @@ class KnowledgeExtractionPipeline:
                 
                 # Log extraction results
                 total_extracted = len(entities) + len(relationships) + len(rules) + len(events) + len(procedures)
-                print(f"✓ Extracted: {len(entities)}E, {len(rules)}RULE, {len(relationships)}R, {len(events)}EV, {len(procedures)}P")
+                # Include post-process message in same line
+                post_msg = result.post_process_message if result.post_process_message else ""
+                print(f"{post_msg}✓ Extracted: {len(entities)}E, {len(rules)}RULE, {len(relationships)}R, {len(events)}EV, {len(procedures)}P")
             else:
                 error_msg = result.error or "Unknown error"
                 print(f"✗ Failed: {error_msg[:50]}..." if len(error_msg) > 50 else f"✗ Failed: {error_msg}")
@@ -425,6 +431,16 @@ class KnowledgeExtractionPipeline:
         
         # Save page results
         self.file_utils.save_page_result(output_dir, page.number, page_data)
+        
+        # Save post-processing errors if any (Option 3)
+        all_post_errors = []
+        for r in results:
+            if r.post_processing_errors:
+                all_post_errors.extend(r.post_processing_errors)
+        
+        if all_post_errors:
+            error_file = save_errors_to_file(all_post_errors, output_dir, page.number)
+            print(f"⚠️ Saved {len(all_post_errors)} post-processing errors to {error_file}")
         
         return results
     
@@ -496,16 +512,35 @@ class KnowledgeExtractionPipeline:
         # Convert to dict
         extraction_dict = extraction.model_dump()
         
+        # Post-process extraction (Option 3)
+        pp_result = self.post_processor.process_extraction(
+            extraction=extraction_dict,
+            page_number=page_number,
+            chunk_index=chunk_index,
+            chunk_text=chunk_text
+        )
+        
+        # Use cleaned extraction
+        cleaned_extraction = pp_result.cleaned_extraction
+        
+        # If errors were found, log them (no newline to keep on same line)
+        post_process_msg = ""
+        if pp_result.was_modified:
+            error_count = len(pp_result.errors)
+            post_process_msg = f"⚠️ Post-process: {error_count} errors detected/fixed "
+        
         return ExtractionResult(
             page_number=page_number,
             chunk_index=chunk_index,
             chunk_text=chunk_text,
-            extraction=extraction_dict,
+            extraction=cleaned_extraction,
             raw_llm_output=raw_output,
             context_entities=context_entities,
             context_rules=context_rules,
             context_relationships=context_relationships,
             last_ids=last_ids,
+            post_processing_errors=pp_result.errors if pp_result.was_modified else [],
+            post_process_message=post_process_msg,
         )
     
     def cleanup(self):

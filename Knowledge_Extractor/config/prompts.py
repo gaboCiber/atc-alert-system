@@ -26,6 +26,17 @@ FORMAL DEFINITION FIELD:
 - Example: "Taxi clearance means an authorization to taxi..." → entity.text="Taxi clearance", formal_definition="an authorization to taxi..."
 - If the term is just mentioned/used, leave formal_definition as null.
 - The formal_definition should be the EXACT or NEAR-EXACT text from the document.
+
+CRITICAL ID RULES (MUST FOLLOW - Option 4):
+1. NEVER duplicate an ID within the same extraction output. Each ID must be unique across ALL types.
+2. Entity IDs MUST start with "E" (E001, E002, E003...). NEVER use D001 or RULE001 for entities.
+3. Relationship IDs MUST start with "R" (R001, R002...).
+4. Event IDs MUST start with "EV" (EV001, EV002...).
+5. Rule IDs MUST start with "RULE" (RULE001, RULE002...). NEVER use E001 or P001 for rules.
+6. Procedure IDs MUST start with "P" (P001, P002...). NEVER use RULE001 for procedures.
+7. BEFORE assigning any ID, check if it already exists in your output. If it does, assign the NEXT sequential ID instead.
+8. If Last Used IDs are provided, continue from those exact numbers (e.g., if entities=E003, the next entity must be E004).
+9. VALIDATION: Double-check that no ID appears twice before finishing your response.
 """
 
 KEX_USER_PROMPT_TEMPLATE = """Extract entities, relationships, events, rules, and procedures from the following text.

@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # ==========================================
 # ENUMS (Para restringir las alucinaciones)
@@ -177,3 +177,53 @@ class AeronauticalExtraction(BaseModel):
     rules: List[Rule] = Field(default_factory=list)
     procedures: List[Procedure] = Field(default_factory=list)
     # Note: definitions removed - use entity.formal_definition for explicit document definitions
+
+    @model_validator(mode='after')
+    def validate_unique_ids(self):
+        """Validar que IDs no se repitan dentro de la extracción (Opción 1)"""
+        all_ids = []
+        
+        for entity in self.entities:
+            all_ids.append(("entity", entity.id))
+        for rel in self.relationships:
+            all_ids.append(("relationship", rel.id))
+        for event in self.events:
+            all_ids.append(("event", event.id))
+        for rule in self.rules:
+            all_ids.append(("rule", rule.id))
+        for proc in self.procedures:
+            all_ids.append(("procedure", proc.id))
+        
+        # Detectar duplicados
+        seen = {}
+        for type_name, id_val in all_ids:
+            if id_val in seen:
+                raise ValueError(f"Duplicate ID {id_val}: found in {type_name} and {seen[id_val]}")
+            seen[id_val] = type_name
+        
+        return self
+
+    @model_validator(mode='after')
+    def validate_id_prefixes(self):
+        """Validar que IDs tengan el prefijo correcto según su tipo (Opción 2)"""
+        for entity in self.entities:
+            if not entity.id.startswith("E"):
+                raise ValueError(f"Entity ID must start with E (e.g., E001): got {entity.id}")
+        
+        for rel in self.relationships:
+            if not rel.id.startswith("R"):
+                raise ValueError(f"Relationship ID must start with R (e.g., R001): got {rel.id}")
+        
+        for event in self.events:
+            if not event.id.startswith("EV"):
+                raise ValueError(f"Event ID must start with EV (e.g., EV001): got {event.id}")
+        
+        for rule in self.rules:
+            if not rule.id.startswith("RULE"):
+                raise ValueError(f"Rule ID must start with RULE (e.g., RULE001): got {rule.id}")
+        
+        for proc in self.procedures:
+            if not proc.id.startswith("P"):
+                raise ValueError(f"Procedure ID must start with P (e.g., P001): got {proc.id}")
+        
+        return self
