@@ -131,6 +131,13 @@ def main():
         help="Maximum relationships to include in context (default: 10)"
     )
     
+    # Validation control options
+    parser.add_argument(
+        "--no-strict-validation",
+        action="store_true",
+        help="Disable strict validation - invalid cross-references will be logged as warnings instead of rejected"
+    )
+    
     args = parser.parse_args()
     
     # Validate PDF exists
@@ -174,6 +181,7 @@ def main():
         resume=resume_config,
         chunks_source_dir=chunks_source,
         chunk_only=args.chunk_only,
+        strict_validation=not args.no_strict_validation,
     )
     
     # Run pipeline

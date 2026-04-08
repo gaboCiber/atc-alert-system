@@ -11,7 +11,6 @@ from ..config.settings import ModelConfig
 from ..config.prompts import build_kex_prompt
 from .llm_client_factory import create_instructor_client, create_raw_client
 
-
 class KEXExtractor:
     """Extract aeronautical knowledge using structured LLM calls."""
     
@@ -29,6 +28,16 @@ class KEXExtractor:
         
         # Raw client for fallback extraction
         self.raw_client = create_raw_client(self.config)
+
+        # Registramos el hook globalmente para este cliente
+        # Cada vez que falle un parseo, se ejecutará esta función
+        self.client.on("parse:error", self._log_validation_error)
+        self.reply_number = 1
+
+    def _log_validation_error(self, error: Exception):
+        """Callback que se ejecuta inmediatamente al fallar una validación."""
+        print(f"\n     └─ ⚠️ [Validación {self.reply_number} Fallida]. Instructor intentará corregir esto automáticamente...")
+        self.reply_number += 1
     
     def extract(
         self,
@@ -66,6 +75,8 @@ class KEXExtractor:
             include_relationships=include_relationships,
             last_ids=last_ids
         )
+
+        self.reply_number = 1
         
         try:
             # Call LLM with Instructor (structured)

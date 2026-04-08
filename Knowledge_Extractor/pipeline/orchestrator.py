@@ -60,7 +60,7 @@ class KnowledgeExtractionPipeline:
         self.kex_extractor = KEXExtractor(config=self.config.model)
         self.id_manager = IDManager()
         self.file_utils = FileUtils()
-        self.post_processor = ExtractionPostProcessor()
+        self.post_processor = ExtractionPostProcessor(strict_validation=self.config.strict_validation)
     
     def _load_previous_state(self, doc_dir: str):
         """
@@ -308,7 +308,7 @@ class KnowledgeExtractionPipeline:
                         print(f"     └─ ✓ LLM created {len(chunks)} logical chunks")
                     except Exception as e:
                         # Fallback to NLTK sentence segmentation
-                        print(f"     ⚠️  LLM segmentation failed: {str(e)[:60]}...")
+                        print(f"     ⚠️  LLM segmentation failed: {str(e)[:300]}...")
                         print(f"     🔄 Falling back to NLTK sentence segmentation...")
                         chunks = self.text_segmenter.segment(page.text)
                         print(f"     └─ ✓ NLTK created {len(chunks)} sentence chunks")
@@ -385,10 +385,10 @@ class KnowledgeExtractionPipeline:
                 total_extracted = len(entities) + len(relationships) + len(rules) + len(events) + len(procedures)
                 # Include post-process message in same line
                 post_msg = result.post_process_message if result.post_process_message else ""
-                print(f"{post_msg}✓ Extracted: {len(entities)}E, {len(rules)}RULE, {len(relationships)}R, {len(events)}EV, {len(procedures)}P")
+                print(f"\n     └─ {post_msg} ✓ Extracted: {len(entities)}E, {len(rules)}RULE, {len(relationships)}R, {len(events)}EV, {len(procedures)}P")
             else:
                 error_msg = result.error or "Unknown error"
-                print(f"✗ Failed: {error_msg[:50]}..." if len(error_msg) > 50 else f"✗ Failed: {error_msg}")
+                print(f"\n     └─ ✗ Failed: {error_msg}")
             
             # Build result data with all context types
             chunk_data = {
@@ -433,14 +433,15 @@ class KnowledgeExtractionPipeline:
         self.file_utils.save_page_result(output_dir, page.number, page_data)
         
         # Save post-processing errors if any (Option 3)
-        all_post_errors = []
+        # Include extraction failures and post-processing errors
+        all_errors = []
         for r in results:
             if r.post_processing_errors:
-                all_post_errors.extend(r.post_processing_errors)
+                all_errors.extend(r.post_processing_errors)
         
-        if all_post_errors:
-            error_file = save_errors_to_file(all_post_errors, output_dir, page.number)
-            print(f"⚠️ Saved {len(all_post_errors)} post-processing errors to {error_file}")
+        if all_errors:
+            error_file = save_errors_to_file(all_errors, output_dir, page.number)
+            print(f"⚠️ Saved {len(all_errors)} errors to {error_file}")
         
         return results
     
@@ -493,7 +494,15 @@ class KnowledgeExtractionPipeline:
         if extraction is None:
             # Extraction failed after all retries, but we have raw_output for debugging
             error_msg = "KEX extraction failed after all retries (see raw_llm_output for details)"
-            print(f"✗ Failed: {error_msg[:60]}...")
+                        
+            # Log extraction failure error
+            extraction_failure_error = self.post_processor._log_extraction_failure(
+                page_number=page_number,
+                chunk_index=chunk_index,
+                chunk_text=chunk_text,
+                error_message=error_msg,
+                raw_llm_output=raw_output
+            )
             
             return ExtractionResult(
                 page_number=page_number,
@@ -506,6 +515,8 @@ class KnowledgeExtractionPipeline:
                 context_relationships=context_relationships,
                 last_ids=last_ids,
                 error=error_msg,
+                post_processing_errors=[extraction_failure_error],
+                post_process_message="⚠️ Extraction failed ",
             )
         
         # Successful extraction
@@ -513,11 +524,20 @@ class KnowledgeExtractionPipeline:
         extraction_dict = extraction.model_dump()
         
         # Post-process extraction (Option 3)
+        # Build set of valid entity IDs from context for cross-reference validation
+        valid_entity_ids = set()
+        for entity in context_entities:
+            if isinstance(entity, dict):
+                ent_id = entity.get("id", "")
+                if ent_id:
+                    valid_entity_ids.add(ent_id)
+        
         pp_result = self.post_processor.process_extraction(
             extraction=extraction_dict,
             page_number=page_number,
             chunk_index=chunk_index,
-            chunk_text=chunk_text
+            chunk_text=chunk_text,
+            valid_entity_ids=valid_entity_ids
         )
         
         # Use cleaned extraction

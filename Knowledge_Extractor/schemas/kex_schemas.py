@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 
 # ==========================================
 # ENUMS (Para restringir las alucinaciones)
@@ -109,11 +109,19 @@ class Entity(BaseModel):
     label: str = Field(..., description="Category of the entity (e.g., ATC_Procedure, Runway)")
     subtype: Optional[str] = Field(None, description="More specific classification (e.g., active)")
     aliases: List[str] = Field(default_factory=list, description="List of synonyms or alternative phrasings")
-    context: str = Field(..., description="Brief semantic description")
+    context: str = Field(..., description="Brief semantic description - MUST NOT be empty or N/A")
     formal_definition: Optional[str] = Field(
         None,
         description="Formal definition provided by the document for this term (only when explicitly defined, e.g., 'Term X means Y...')"
     )
+
+    @field_validator('context')
+    @classmethod
+    def validate_context_not_empty(cls, v: str) -> str:
+        """Validate that entity context is not empty, N/A, or None."""
+        if not v or v.strip() == "" or v.strip().upper() == "N/A" or v.strip().lower() == "none":
+            raise ValueError("Entity context cannot be empty, N/A, or None. Provide a meaningful semantic description.")
+        return v
 
 class Relationship(BaseModel):
     id: str = Field(..., description="UNIQUE_ID (e.g., R001)")

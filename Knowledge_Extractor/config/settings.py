@@ -71,6 +71,9 @@ class PipelineConfig:
     # Chunk-only mode (skip KEX extraction, only extract and save chunks)
     chunk_only: bool = False
     
+    # Validation configuration
+    strict_validation: bool = True  # Reject items with invalid cross-references
+    
     def __post_init__(self):
         if isinstance(self.model, dict):
             self.model = ModelConfig(**self.model)

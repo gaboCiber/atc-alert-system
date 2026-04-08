@@ -37,6 +37,12 @@ CRITICAL ID RULES (MUST FOLLOW - Option 4):
 7. BEFORE assigning any ID, check if it already exists in your output. If it does, assign the NEXT sequential ID instead.
 8. If Last Used IDs are provided, continue from those exact numbers (e.g., if entities=E003, the next entity must be E004).
 9. VALIDATION: Double-check that no ID appears twice before finishing your response.
+
+ENTITY CONTEXT RULE:
+- Every entity MUST have a non-empty, meaningful context field describing its semantic meaning.
+- Do NOT use empty strings, "N/A", "None", or "null" for context.
+- Example: entity.text="taxiway", context="A defined path for aircraft to taxi on the ground"
+- The context must provide enough information to understand the entity's role in ATC operations.
 """
 
 KEX_USER_PROMPT_TEMPLATE = """Extract entities, relationships, events, rules, and procedures from the following text.
