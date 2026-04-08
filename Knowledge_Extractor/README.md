@@ -12,6 +12,8 @@ Extract aeronautical knowledge (entities, relationships, rules, procedures) from
 - **Resume Capability**: Start from specific page with previous entities as context
 - **Sequential ID Management**: E001, R001, RULE001, EV001, P001
 - **Structured Output** via Pydantic/Instructor with automatic validation
+- **Validation & Error Logging**: Strict/lenient cross-reference validation, extraction failure logging, empty context rejection
+- **Retry Logging**: Track failed Instructor validation attempts in real-time
 - **Memory Management**: Automatic Ollama model unloading after processing
 - **Granular Processing**: Process by page, sentence, or logical chunks
 
@@ -100,6 +102,17 @@ python -m Knowledge_Extractor document.pdf --no-rules --no-relationships
 
 # Adjust context limits per type
 python -m Knowledge_Extractor document.pdf --rule-limit 10 --relationship-limit 15
+
+#### Validation Control
+
+Control strictness of validation for cross-references:
+
+```bash
+# Strict validation (default) - reject items with invalid cross-references
+python -m Knowledge_Extractor document.pdf
+
+# Lenient validation - log warnings but keep invalid items
+python -m Knowledge_Extractor document.pdf --no-strict-validation
 ```
 
 #### External Chunks Source
@@ -269,6 +282,13 @@ Each page generates a JSON file (`pagina_N.json`):
 ### Pipeline Settings
 - `chunks_source_dir`: Directory with pre-generated chunks (optional)
 - `granularity`: Processing level (page, sentence, chunk)
+- `strict_validation`: Reject items with invalid cross-references (default: true)
+
+### Validation Settings
+- `strict_validation`: When true, items with invalid cross-references (wrong ID prefixes, missing entity references) are rejected. When false, they are logged as warnings but kept in output.
+- **Extraction Failures**: When LLM fails all retries, error details are saved to `pagina_N_errors.json` including chunk text and raw LLM output.
+- **Entity Context**: Pydantic validator ensures entity context is never empty, "N/A", or null.
+- **Retry Logging**: Failed Instructor validation attempts are logged in real-time (e.g., "⚠️ Retry 1 failed: ...")
 
 ## Extracted Schema
 

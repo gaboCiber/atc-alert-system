@@ -38,6 +38,13 @@ def main():
         default="sentence",
         help="Processing granularity: page (full page), sentence (individual sentences), chunk (logical chunks with LLM) (default: sentence)"
     )
+
+    parser.add_argument(
+        "-e", "--extraction-mode",
+        choices=["joint", "sequential"],
+        default="joint",
+        help="Extraction mode: joint (all types at once) or sequential (entities → relationships → events → rules → procedures). Default: joint"
+    )
     
     parser.add_argument(
         "--base-url",
@@ -108,13 +115,13 @@ def main():
     parser.add_argument(
         "--no-rules",
         action="store_true",
-        help="Exclude rules from context"
+        help="Exclude rules from context (joint mode only; sequential always extracts all types)"
     )
     
     parser.add_argument(
         "--no-relationships",
         action="store_true",
-        help="Exclude relationships from context"
+        help="Exclude relationships from context (joint mode only; sequential always extracts all types)"
     )
     
     parser.add_argument(
@@ -151,6 +158,7 @@ def main():
         provider=args.provider,
         base_url=args.base_url,
         api_key=args.api_key,
+        extraction_mode=args.extraction_mode,
     )
     
     embedding_config = EmbeddingConfig(

@@ -377,6 +377,8 @@ class KnowledgeExtractionPipeline:
                 self.context_manager.add_entities(entities)
                 self.context_manager.add_rules(rules)
                 self.context_manager.add_relationships(relationships)
+                self.context_manager.add_events(events)
+                self.context_manager.add_procedures(procedures)
                 
                 # Update ID manager
                 self.id_manager.update_from_extraction(result.extraction)
@@ -479,16 +481,34 @@ class KnowledgeExtractionPipeline:
                 parts.append(f"{len(context_relationships)}R")
             print(f"(context: {', '.join(parts)})", end=" ")
         
-        # Extract with KEX (always returns, even on failure)
-        extraction, raw_output = self.kex_extractor.extract(
-            text=chunk_text,
-            context_entities=context_entities,
-            context_rules=context_rules,
-            context_relationships=context_relationships,
-            include_rules=self.config.embedding.include_rules,
-            include_relationships=self.config.embedding.include_relationships,
-            last_ids=last_ids,
-        )
+        # Extract with KEX based on extraction_mode
+        if self.config.model.extraction_mode == "sequential":
+            # Sequential mode: extract types in order with accumulated context
+            accumulated = self._get_accumulated_context()
+            extraction, raw_output = self.kex_extractor.extract_sequential(
+                text=chunk_text,
+                accumulated_entities=accumulated["entities"],
+                accumulated_relationships=accumulated["relationships"],
+                accumulated_events=accumulated["events"],
+                accumulated_rules=accumulated["rules"],
+                accumulated_procedures=accumulated["procedures"],
+                last_ids=last_ids,
+            )
+            # For sequential mode, use accumulated entities as context
+            context_entities = accumulated["entities"]
+            context_rules = accumulated["rules"]
+            context_relationships = accumulated["relationships"]
+        else:
+            # Joint mode (default): extract all at once
+            extraction, raw_output = self.kex_extractor.extract(
+                text=chunk_text,
+                context_entities=context_entities,
+                context_rules=context_rules,
+                context_relationships=context_relationships,
+                include_rules=self.config.embedding.include_rules,
+                include_relationships=self.config.embedding.include_relationships,
+                last_ids=last_ids,
+            )
         
         # Check if extraction succeeded
         if extraction is None:
@@ -563,6 +583,28 @@ class KnowledgeExtractionPipeline:
             post_process_message=post_process_msg,
         )
     
+    def _get_accumulated_context(self) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get all accumulated context from previous pages for sequential extraction.
+        
+        Returns:
+            Dictionary with all accumulated types:
+            {
+                "entities": [...],
+                "relationships": [...],
+                "events": [...],
+                "rules": [...],
+                "procedures": [...]
+            }
+        """
+        return {
+            "entities": self.context_manager.get_all_entities(),
+            "relationships": self.context_manager.get_all_relationships(),
+            "events": self.context_manager.get_all_events(),
+            "rules": self.context_manager.get_all_rules(),
+            "procedures": self.context_manager.get_all_procedures(),
+        }
+
     def cleanup(self):
         """
         Release Ollama models from memory.

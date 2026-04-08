@@ -235,3 +235,35 @@ class AeronauticalExtraction(BaseModel):
                 raise ValueError(f"Procedure ID must start with P (e.g., P001): got {proc.id}")
         
         return self
+
+
+# ==========================================
+# ESQUEMAS INDIVIDUALES PARA EXTRACCIÓN SECUENCIAL
+# ==========================================
+
+class EntityExtraction(BaseModel):
+    """Schema for sequential entity extraction (Step 1)."""
+    entities: List[Entity] = Field(default_factory=list, description="Extract all entities from the text")
+
+class RelationshipExtraction(BaseModel):
+    """Schema for sequential relationship extraction (Step 2).
+    Requires entities from Step 1 for subject_id/object_id references."""
+    relationships: List[Relationship] = Field(default_factory=list, description="Extract relationships referencing entities from context")
+
+class EventExtraction(BaseModel):
+    """Schema for sequential event extraction (Step 3).
+    Requires entities from Step 1 for actors/targets references."""
+    events: List[Event] = Field(default_factory=list, description="Extract events referencing entities from context")
+
+class RuleExtraction(BaseModel):
+    """Schema for sequential rule extraction (Step 4).
+    Requires entities from Step 1 for trigger/action references.
+    Requires relationships from Step 2 for linked_relationships."""
+    rules: List[Rule] = Field(default_factory=list, description="Extract rules referencing entities and relationships from context")
+
+class ProcedureExtraction(BaseModel):
+    """Schema for sequential procedure extraction (Step 5).
+    Requires entities from Step 1 for required_entities.
+    Requires rules from Step 4 for linked_rules.
+    Requires events from Step 3 for required_events in steps."""
+    procedures: List[Procedure] = Field(default_factory=list, description="Extract procedures referencing entities, rules, and events from context")

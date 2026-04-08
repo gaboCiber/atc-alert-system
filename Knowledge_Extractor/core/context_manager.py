@@ -1,6 +1,6 @@
 """
 Context manager for multi-type embeddings and similarity-based selection.
-Manages entities, rules, and relationships with semantic retrieval.
+Manages entities, rules, relationships, events, and procedures with semantic retrieval.
 """
 from typing import List, Dict, Any, Optional
 from ..config.settings import EmbeddingConfig
@@ -24,6 +24,8 @@ class ContextManager:
         self.entity_store = VectorStore(model_name, self._build_entity_embed_text)
         self.rule_store = VectorStore(model_name, self._build_rule_embed_text)
         self.relationship_store = VectorStore(model_name, self._build_relationship_embed_text)
+        self.event_store = VectorStore(model_name, self._build_event_embed_text)
+        self.procedure_store = VectorStore(model_name, self._build_procedure_embed_text)
         
         # Store limits from config
         self.threshold = self.config.threshold
@@ -101,6 +103,43 @@ class ContextManager:
         
         return " | ".join(parts).strip()
     
+    def _build_event_embed_text(self, event: Dict[str, Any]) -> str:
+        """Build text representation for event embedding."""
+        parts = []
+        
+        event_type = event.get("event_type", "")
+        trigger_text = event.get("trigger_text", "")
+        phase = event.get("phase", "")
+        temporal_context = event.get("temporal_context", "")
+        
+        if event_type:
+            parts.append(f"type: {event_type}")
+        if trigger_text:
+            parts.append(f"trigger: {trigger_text}")
+        if phase:
+            parts.append(f"phase: {phase}")
+        if temporal_context:
+            parts.append(f"when: {temporal_context}")
+        
+        return " | ".join(parts).strip()
+    
+    def _build_procedure_embed_text(self, procedure: Dict[str, Any]) -> str:
+        """Build text representation for procedure embedding."""
+        parts = []
+        
+        name = procedure.get("name", "")
+        purpose = procedure.get("purpose", "")
+        context = procedure.get("context", "")
+        
+        if name:
+            parts.append(f"name: {name}")
+        if purpose:
+            parts.append(f"purpose: {purpose}")
+        if context:
+            parts.append(f"context: {context}")
+        
+        return " | ".join(parts).strip()
+    
     # ==========================================
     # Add Methods
     # ==========================================
@@ -127,6 +166,20 @@ class ContextManager:
             obj = rel.get("object_text", "")
             return f"{subj}:{pred}:{obj}"
         return self.relationship_store.add_items(relationships, get_rel_key)
+    
+    def add_events(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Add events, avoiding duplicates."""
+        # Use event_type + trigger_text as key
+        def get_event_key(event):
+            event_type = event.get("event_type", "")
+            trigger = event.get("trigger_text", "")
+            return f"{event_type}:{trigger[:50]}"
+        return self.event_store.add_items(events, get_event_key)
+    
+    def add_procedures(self, procedures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Add procedures, avoiding duplicates."""
+        # Use procedure name as key
+        return self.procedure_store.add_items(procedures, lambda p: p.get("name", ""))
     
     # ==========================================
     # Select Methods
@@ -205,6 +258,14 @@ class ContextManager:
         """Get all accumulated relationships."""
         return self.relationship_store.get_all()
     
+    def get_all_events(self) -> List[Dict[str, Any]]:
+        """Get all accumulated events."""
+        return self.event_store.get_all()
+    
+    def get_all_procedures(self) -> List[Dict[str, Any]]:
+        """Get all accumulated procedures."""
+        return self.procedure_store.get_all()
+    
     def get_entity_count(self) -> int:
         """Get total number of accumulated entities."""
         return self.entity_store.get_count()
@@ -217,6 +278,14 @@ class ContextManager:
         """Get total number of accumulated relationships."""
         return self.relationship_store.get_count()
     
+    def get_event_count(self) -> int:
+        """Get total number of accumulated events."""
+        return self.event_store.get_count()
+    
+    def get_procedure_count(self) -> int:
+        """Get total number of accumulated procedures."""
+        return self.procedure_store.get_count()
+    
     # ==========================================
     # Utility
     # ==========================================
@@ -226,3 +295,5 @@ class ContextManager:
         self.entity_store.reset()
         self.rule_store.reset()
         self.relationship_store.reset()
+        self.event_store.reset()
+        self.procedure_store.reset()

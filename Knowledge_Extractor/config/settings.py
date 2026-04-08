@@ -14,6 +14,7 @@ class ModelConfig:
     api_key: str = "ollama"
     max_retries: int = 3
     timeout: int = 120
+    extraction_mode: Literal["joint", "sequential"] = "joint"
 
 
 @dataclass
