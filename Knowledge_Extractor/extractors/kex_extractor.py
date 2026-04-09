@@ -224,16 +224,19 @@ class KEXExtractor:
             return None, "\n\n".join(all_raw_outputs)
 
         # Combine all results into AeronauticalExtraction
-        extraction = AeronauticalExtraction(
-            entities=entities,
-            relationships=relationships,
-            events=events,
-            rules=rules,
-            procedures=procedures
-        )
-
         combined_raw = "\n\n".join(all_raw_outputs)
-        return extraction, combined_raw
+        try:
+            extraction = AeronauticalExtraction(
+                entities=entities,
+                relationships=relationships,
+                events=events,
+                rules=rules,
+                procedures=procedures
+            )
+            return extraction, combined_raw
+        except Exception as e:
+            combined_raw = f"{combined_raw}\n\n=== FINAL ASSEMBLY ERROR ===\n{str(e)}"
+            return None, combined_raw
 
     def _run_extraction_step(
         self,
@@ -293,7 +296,7 @@ class KEXExtractor:
             previous_entities=previous_entities,
             last_ids=last_ids
         )
-        
+
         try:
             response = self.client.chat.completions.create(
                 model=self.config.name,
@@ -304,11 +307,11 @@ class KEXExtractor:
                     {"role": "user", "content": user_prompt},
                 ],
             )
-            
+
             raw_output = response.model_dump_json(indent=2)
             entities = [e.model_dump() for e in response.entities]
             return entities, raw_output, True
-            
+
         except Exception as e:
             error_output = f"EXTRACTION_FAILED: {str(e)}"
             try:
@@ -322,7 +325,7 @@ class KEXExtractor:
                         temperature=0.0,
                     )
                     error_output += f"\n\nRAW_OUTPUT:\n{raw_response.choices[0].message.content}"
-            except:
+            except Exception:
                 pass
             return [], error_output, False
 
@@ -340,7 +343,7 @@ class KEXExtractor:
             previous_relationships=previous_relationships,
             last_ids=last_ids
         )
-        
+
         try:
             response = self.client.chat.completions.create(
                 model=self.config.name,
@@ -351,11 +354,11 @@ class KEXExtractor:
                     {"role": "user", "content": user_prompt},
                 ],
             )
-            
+
             raw_output = response.model_dump_json(indent=2)
             relationships = [r.model_dump() for r in response.relationships]
             return relationships, raw_output, True
-            
+
         except Exception as e:
             error_output = f"EXTRACTION_FAILED: {str(e)}"
             try:
@@ -369,7 +372,7 @@ class KEXExtractor:
                         temperature=0.0,
                     )
                     error_output += f"\n\nRAW_OUTPUT:\n{raw_response.choices[0].message.content}"
-            except:
+            except Exception:
                 pass
             return [], error_output, False
 
@@ -387,7 +390,7 @@ class KEXExtractor:
             previous_events=previous_events,
             last_ids=last_ids
         )
-        
+
         try:
             response = self.client.chat.completions.create(
                 model=self.config.name,
@@ -398,11 +401,11 @@ class KEXExtractor:
                     {"role": "user", "content": user_prompt},
                 ],
             )
-            
+
             raw_output = response.model_dump_json(indent=2)
             events = [e.model_dump() for e in response.events]
             return events, raw_output, True
-            
+
         except Exception as e:
             error_output = f"EXTRACTION_FAILED: {str(e)}"
             try:
@@ -416,7 +419,7 @@ class KEXExtractor:
                         temperature=0.0,
                     )
                     error_output += f"\n\nRAW_OUTPUT:\n{raw_response.choices[0].message.content}"
-            except:
+            except Exception:
                 pass
             return [], error_output, False
 
@@ -436,7 +439,7 @@ class KEXExtractor:
             previous_rules=previous_rules,
             last_ids=last_ids
         )
-        
+
         try:
             response = self.client.chat.completions.create(
                 model=self.config.name,
@@ -447,11 +450,11 @@ class KEXExtractor:
                     {"role": "user", "content": user_prompt},
                 ],
             )
-            
+
             raw_output = response.model_dump_json(indent=2)
             rules = [r.model_dump(by_alias=True) for r in response.rules]
             return rules, raw_output, True
-            
+
         except Exception as e:
             error_output = f"EXTRACTION_FAILED: {str(e)}"
             try:
@@ -465,7 +468,7 @@ class KEXExtractor:
                         temperature=0.0,
                     )
                     error_output += f"\n\nRAW_OUTPUT:\n{raw_response.choices[0].message.content}"
-            except:
+            except Exception:
                 pass
             return [], error_output, False
 
@@ -487,7 +490,7 @@ class KEXExtractor:
             previous_procedures=previous_procedures,
             last_ids=last_ids
         )
-        
+
         try:
             response = self.client.chat.completions.create(
                 model=self.config.name,
@@ -498,11 +501,11 @@ class KEXExtractor:
                     {"role": "user", "content": user_prompt},
                 ],
             )
-            
+
             raw_output = response.model_dump_json(indent=2)
             procedures = [p.model_dump() for p in response.procedures]
             return procedures, raw_output, True
-            
+
         except Exception as e:
             error_output = f"EXTRACTION_FAILED: {str(e)}"
             try:
@@ -516,6 +519,6 @@ class KEXExtractor:
                         temperature=0.0,
                     )
                     error_output += f"\n\nRAW_OUTPUT:\n{raw_response.choices[0].message.content}"
-            except:
+            except Exception:
                 pass
             return [], error_output, False

@@ -298,7 +298,7 @@ class KnowledgeExtractionPipeline:
                 chunks = self.text_segmenter.segment(page.text)
                 print(f"     └─ Split into {len(chunks)} sentences")
             elif self.config.granularity == "chunk":
-                sentences = page.text.split("\n")
+                sentences = list(filter(None, page.text.split("\n")))
                 print(f"     └─ Found {len(sentences)} lines, attempting LLM segmentation...")
                 
                 if sentences:
@@ -454,134 +454,166 @@ class KnowledgeExtractionPipeline:
         chunk_text: str
     ) -> ExtractionResult:
         """Process a single text chunk."""
-        # Select all context types based on config
-        selected_context = self.context_manager.select_context(
-            chunk_text,
-            include_entities=True,
-            include_rules=self.config.embedding.include_rules,
-            include_relationships=self.config.embedding.include_relationships
-        )
-        
-        context_entities = selected_context["entities"]
-        context_rules = selected_context["rules"]
-        context_relationships = selected_context["relationships"]
-        
-        # Get last IDs
-        last_ids = self.id_manager.get_all_ids()
-        
-        # Log context info
-        total_context = len(context_entities) + len(context_rules) + len(context_relationships)
-        if total_context > 0:
-            parts = []
-            if context_entities:
-                parts.append(f"{len(context_entities)}E")
-            if context_rules:
-                parts.append(f"{len(context_rules)}RULE")
-            if context_relationships:
-                parts.append(f"{len(context_relationships)}R")
-            print(f"(context: {', '.join(parts)})", end=" ")
-        
-        # Extract with KEX based on extraction_mode
-        if self.config.model.extraction_mode == "sequential":
-            # Sequential mode: extract types in order with accumulated context
-            accumulated = self._get_accumulated_context()
-            extraction, raw_output = self.kex_extractor.extract_sequential(
-                text=chunk_text,
-                accumulated_entities=accumulated["entities"],
-                accumulated_relationships=accumulated["relationships"],
-                accumulated_events=accumulated["events"],
-                accumulated_rules=accumulated["rules"],
-                accumulated_procedures=accumulated["procedures"],
-                last_ids=last_ids,
-            )
-            # For sequential mode, use accumulated entities as context
-            context_entities = accumulated["entities"]
-            context_rules = accumulated["rules"]
-            context_relationships = accumulated["relationships"]
-        else:
-            # Joint mode (default): extract all at once
-            extraction, raw_output = self.kex_extractor.extract(
-                text=chunk_text,
-                context_entities=context_entities,
-                context_rules=context_rules,
-                context_relationships=context_relationships,
+        context_entities: List[Dict[str, Any]] = []
+        context_rules: List[Dict[str, Any]] = []
+        context_relationships: List[Dict[str, Any]] = []
+        last_ids: Dict[str, Any] = {}
+        raw_output: str = ""
+
+        try:
+            # Select all context types based on config
+            selected_context = self.context_manager.select_context(
+                chunk_text,
+                include_entities=True,
                 include_rules=self.config.embedding.include_rules,
-                include_relationships=self.config.embedding.include_relationships,
-                last_ids=last_ids,
+                include_relationships=self.config.embedding.include_relationships
             )
-        
-        # Check if extraction succeeded
-        if extraction is None:
-            # Extraction failed after all retries, but we have raw_output for debugging
-            error_msg = "KEX extraction failed after all retries (see raw_llm_output for details)"
-                        
-            # Log extraction failure error
-            extraction_failure_error = self.post_processor._log_extraction_failure(
+            
+            context_entities = selected_context["entities"]
+            context_rules = selected_context["rules"]
+            context_relationships = selected_context["relationships"]
+            
+            # Get last IDs
+            last_ids = self.id_manager.get_all_ids()
+            
+            # Log context info
+            total_context = len(context_entities) + len(context_rules) + len(context_relationships)
+            if total_context > 0:
+                parts = []
+                if context_entities:
+                    parts.append(f"{len(context_entities)}E")
+                if context_rules:
+                    parts.append(f"{len(context_rules)}RULE")
+                if context_relationships:
+                    parts.append(f"{len(context_relationships)}R")
+                print(f"(context: {', '.join(parts)})", end=" ")
+            
+            # Extract with KEX based on extraction_mode
+            if self.config.model.extraction_mode == "sequential":
+                # Sequential mode: extract types in order with accumulated context
+                accumulated = self._get_accumulated_context()
+                extraction, raw_output = self.kex_extractor.extract_sequential(
+                    text=chunk_text,
+                    accumulated_entities=accumulated["entities"],
+                    accumulated_relationships=accumulated["relationships"],
+                    accumulated_events=accumulated["events"],
+                    accumulated_rules=accumulated["rules"],
+                    accumulated_procedures=accumulated["procedures"],
+                    last_ids=last_ids,
+                )
+                # For sequential mode, use accumulated items as context
+                context_entities = accumulated["entities"]
+                context_rules = accumulated["rules"]
+                context_relationships = accumulated["relationships"]
+            else:
+                # Joint mode (default): extract all at once
+                extraction, raw_output = self.kex_extractor.extract(
+                    text=chunk_text,
+                    context_entities=context_entities,
+                    context_rules=context_rules,
+                    context_relationships=context_relationships,
+                    include_rules=self.config.embedding.include_rules,
+                    include_relationships=self.config.embedding.include_relationships,
+                    last_ids=last_ids,
+                )
+            
+            # Check if extraction succeeded
+            if extraction is None:
+                # Extraction failed after all retries, but we have raw_output for debugging
+                error_msg = "KEX extraction failed after all retries (see raw_llm_output for details)"
+                            
+                # Log extraction failure error
+                extraction_failure_error = self.post_processor._log_extraction_failure(
+                    page_number=page_number,
+                    chunk_index=chunk_index,
+                    chunk_text=chunk_text,
+                    error_message=error_msg,
+                    raw_llm_output=raw_output
+                )
+                
+                return ExtractionResult(
+                    page_number=page_number,
+                    chunk_index=chunk_index,
+                    chunk_text=chunk_text,
+                    extraction=None,
+                    raw_llm_output=raw_output,  # Always save for debugging
+                    context_entities=context_entities,
+                    context_rules=context_rules,
+                    context_relationships=context_relationships,
+                    last_ids=last_ids,
+                    error=error_msg,
+                    post_processing_errors=[extraction_failure_error],
+                    post_process_message="⚠️ Extraction failed ",
+                )
+            
+            # Successful extraction
+            # Convert to dict
+            extraction_dict = extraction.model_dump()
+            
+            # Post-process extraction (Option 3)
+            # Build set of valid entity IDs from context for cross-reference validation
+            valid_entity_ids = set()
+            for entity in context_entities:
+                if isinstance(entity, dict):
+                    ent_id = entity.get("id", "")
+                    if ent_id:
+                        valid_entity_ids.add(ent_id)
+            
+            pp_result = self.post_processor.process_extraction(
+                extraction=extraction_dict,
                 page_number=page_number,
                 chunk_index=chunk_index,
                 chunk_text=chunk_text,
-                error_message=error_msg,
-                raw_llm_output=raw_output
+                valid_entity_ids=valid_entity_ids
             )
+            
+            # Use cleaned extraction
+            cleaned_extraction = pp_result.cleaned_extraction
+            
+            # If errors were found, log them (no newline to keep on same line)
+            post_process_msg = ""
+            if pp_result.was_modified:
+                error_count = len(pp_result.errors)
+                post_process_msg = f"⚠️ Post-process: {error_count} errors detected/fixed "
             
             return ExtractionResult(
                 page_number=page_number,
                 chunk_index=chunk_index,
                 chunk_text=chunk_text,
+                extraction=cleaned_extraction,
+                raw_llm_output=raw_output,
+                context_entities=context_entities,
+                context_rules=context_rules,
+                context_relationships=context_relationships,
+                last_ids=last_ids,
+                post_processing_errors=pp_result.errors if pp_result.was_modified else [],
+                post_process_message=post_process_msg,
+            )
+        except Exception as e:
+            error_msg = f"Unhandled exception during chunk processing: {str(e)}"
+
+            extraction_failure_error = self.post_processor._log_extraction_failure(
+                page_number=page_number,
+                chunk_index=chunk_index,
+                chunk_text=chunk_text,
+                error_message=error_msg,
+                raw_llm_output=raw_output,
+            )
+
+            return ExtractionResult(
+                page_number=page_number,
+                chunk_index=chunk_index,
+                chunk_text=chunk_text,
                 extraction=None,
-                raw_llm_output=raw_output,  # Always save for debugging
+                raw_llm_output=raw_output,
                 context_entities=context_entities,
                 context_rules=context_rules,
                 context_relationships=context_relationships,
                 last_ids=last_ids,
                 error=error_msg,
                 post_processing_errors=[extraction_failure_error],
-                post_process_message="⚠️ Extraction failed ",
+                post_process_message="⚠️ Exception caught ",
             )
-        
-        # Successful extraction
-        # Convert to dict
-        extraction_dict = extraction.model_dump()
-        
-        # Post-process extraction (Option 3)
-        # Build set of valid entity IDs from context for cross-reference validation
-        valid_entity_ids = set()
-        for entity in context_entities:
-            if isinstance(entity, dict):
-                ent_id = entity.get("id", "")
-                if ent_id:
-                    valid_entity_ids.add(ent_id)
-        
-        pp_result = self.post_processor.process_extraction(
-            extraction=extraction_dict,
-            page_number=page_number,
-            chunk_index=chunk_index,
-            chunk_text=chunk_text,
-            valid_entity_ids=valid_entity_ids
-        )
-        
-        # Use cleaned extraction
-        cleaned_extraction = pp_result.cleaned_extraction
-        
-        # If errors were found, log them (no newline to keep on same line)
-        post_process_msg = ""
-        if pp_result.was_modified:
-            error_count = len(pp_result.errors)
-            post_process_msg = f"⚠️ Post-process: {error_count} errors detected/fixed "
-        
-        return ExtractionResult(
-            page_number=page_number,
-            chunk_index=chunk_index,
-            chunk_text=chunk_text,
-            extraction=cleaned_extraction,
-            raw_llm_output=raw_output,
-            context_entities=context_entities,
-            context_rules=context_rules,
-            context_relationships=context_relationships,
-            last_ids=last_ids,
-            post_processing_errors=pp_result.errors if pp_result.was_modified else [],
-            post_process_message=post_process_msg,
-        )
     
     def _get_accumulated_context(self) -> Dict[str, List[Dict[str, Any]]]:
         """
