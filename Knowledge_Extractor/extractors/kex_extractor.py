@@ -449,7 +449,7 @@ class KEXExtractor:
             )
             
             raw_output = response.model_dump_json(indent=2)
-            rules = [r.model_dump() for r in response.rules]
+            rules = [r.model_dump(by_alias=True) for r in response.rules]
             return rules, raw_output, True
             
         except Exception as e:
