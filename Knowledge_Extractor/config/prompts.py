@@ -24,8 +24,9 @@ Extract ALL instances of aeronautical entities and their operational relationshi
 FORMAL DEFINITION FIELD:
 - Only populate entity.formal_definition when the document EXPLICITLY defines the term.
 - Example: "Taxi clearance means an authorization to taxi..." → entity.text="Taxi clearance", formal_definition="an authorization to taxi..."
-- If the term is just mentioned/used, leave formal_definition as null.
+- If the term is just mentioned/used, leave formal_definition as null (NOT "N/A", NOT "None", NOT empty string).
 - The formal_definition should be the EXACT or NEAR-EXACT text from the document.
+- CRITICAL: NEVER use "N/A", "None", or "" for formal_definition. Use null/None (JSON null) instead.
 
 CRITICAL ID RULES (MUST FOLLOW - Option 4):
 1. NEVER duplicate an ID within the same extraction output. Each ID must be unique across ALL types.

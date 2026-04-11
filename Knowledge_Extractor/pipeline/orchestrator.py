@@ -489,10 +489,11 @@ class KnowledgeExtractionPipeline:
                 print(f"(context: {', '.join(parts)})", end=" ")
             
             # Extract with KEX based on extraction_mode
+            step_errors: List[Dict[str, Any]] = []
             if self.config.model.extraction_mode == "sequential":
                 # Sequential mode: extract types in order with accumulated context
                 accumulated = self._get_accumulated_context()
-                extraction, raw_output = self.kex_extractor.extract_sequential(
+                extraction, raw_output, step_errors = self.kex_extractor.extract_sequential(
                     text=chunk_text,
                     accumulated_entities=accumulated["entities"],
                     accumulated_relationships=accumulated["relationships"],
@@ -517,19 +518,38 @@ class KnowledgeExtractionPipeline:
                     last_ids=last_ids,
                 )
             
-            # Check if extraction succeeded
+            # Check if extraction succeeded (None means total failure in sequential mode)
             if extraction is None:
                 # Extraction failed after all retries, but we have raw_output for debugging
                 error_msg = "KEX extraction failed after all retries (see raw_llm_output for details)"
+                
+                # Build list of all errors including step errors
+                all_errors: List[Dict[str, Any]] = []
+                
+                # Log step errors from sequential extraction
+                for step_error in step_errors:
+                    step_extraction_error = self.post_processor._log_extraction_failure(
+                        page_number=page_number,
+                        chunk_index=chunk_index,
+                        chunk_text=chunk_text,
+                        error_message=f"Step {step_error['step_num']} ({step_error['step']}) failed: {step_error['error']}",
+                        raw_llm_output=step_error.get('raw_output', '')
+                    )
+                    # Enhance error with step info
+                    step_extraction_error['step'] = step_error['step']
+                    step_extraction_error['step_num'] = step_error['step_num']
+                    all_errors.append(step_extraction_error)
                             
-                # Log extraction failure error
-                extraction_failure_error = self.post_processor._log_extraction_failure(
-                    page_number=page_number,
-                    chunk_index=chunk_index,
-                    chunk_text=chunk_text,
-                    error_message=error_msg,
-                    raw_llm_output=raw_output
-                )
+                # Log general extraction failure if no specific step errors
+                if not step_errors:
+                    extraction_failure_error = self.post_processor._log_extraction_failure(
+                        page_number=page_number,
+                        chunk_index=chunk_index,
+                        chunk_text=chunk_text,
+                        error_message=error_msg,
+                        raw_llm_output=raw_output
+                    )
+                    all_errors.append(extraction_failure_error)
                 
                 return ExtractionResult(
                     page_number=page_number,
@@ -542,7 +562,7 @@ class KnowledgeExtractionPipeline:
                     context_relationships=context_relationships,
                     last_ids=last_ids,
                     error=error_msg,
-                    post_processing_errors=[extraction_failure_error],
+                    post_processing_errors=all_errors,
                     post_process_message="⚠️ Extraction failed ",
                 )
             
@@ -572,9 +592,27 @@ class KnowledgeExtractionPipeline:
             
             # If errors were found, log them (no newline to keep on same line)
             post_process_msg = ""
+            all_post_errors: List[Dict[str, Any]] = pp_result.errors if pp_result.was_modified else []
+            
+            # Add step errors from sequential extraction as warnings (partial success)
+            if step_errors:
+                for step_error in step_errors:
+                    step_warning = self.post_processor._log_extraction_failure(
+                        page_number=page_number,
+                        chunk_index=chunk_index,
+                        chunk_text=chunk_text,
+                        error_message=f"Step {step_error['step_num']} ({step_error['step']}) had errors but extraction continued",
+                        raw_llm_output=step_error.get('raw_output', '')
+                    )
+                    step_warning['step'] = step_error['step']
+                    step_warning['step_num'] = step_error['step_num']
+                    step_warning['severity'] = 'warning'  # Mark as warning, not fatal error
+                    all_post_errors.append(step_warning)
+                post_process_msg += f"⚠️ {len(step_errors)} step(s) with errors "
+            
             if pp_result.was_modified:
                 error_count = len(pp_result.errors)
-                post_process_msg = f"⚠️ Post-process: {error_count} errors detected/fixed "
+                post_process_msg += f"Post-process: {error_count} errors detected/fixed "
             
             return ExtractionResult(
                 page_number=page_number,
@@ -586,7 +624,7 @@ class KnowledgeExtractionPipeline:
                 context_rules=context_rules,
                 context_relationships=context_relationships,
                 last_ids=last_ids,
-                post_processing_errors=pp_result.errors if pp_result.was_modified else [],
+                post_processing_errors=all_post_errors,
                 post_process_message=post_process_msg,
             )
         except Exception as e:

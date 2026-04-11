@@ -50,7 +50,9 @@ class FileUtils:
             page_number: Page number.
             data: Data to save.
         """
-        filepath = Path(output_dir) / f"pagina_{page_number}.json"
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        filepath = output_path / f"pagina_{page_number}.json"
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     

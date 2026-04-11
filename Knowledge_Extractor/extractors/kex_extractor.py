@@ -141,7 +141,7 @@ class KEXExtractor:
         accumulated_rules: List[Dict[str, Any]],
         accumulated_procedures: List[Dict[str, Any]],
         last_ids: Optional[Dict[str, str]] = None
-    ) -> Tuple[Optional[AeronauticalExtraction], str]:
+    ) -> Tuple[Optional[AeronauticalExtraction], str, List[Dict[str, Any]]]:
         """
         Extract knowledge sequentially in 5 steps:
         1. Entities (no dependencies)
@@ -150,15 +150,19 @@ class KEXExtractor:
         4. Rules (needs entities + relationships)
         5. Procedures (needs entities + rules + events)
         
+        If a step fails, the extraction continues with the next steps.
+        Failed steps are logged and returned as step_errors.
+        
         Args:
             text: Text to analyze
             accumulated_*: Previously extracted items from previous pages (for deduplication)
             last_ids: Last used IDs for sequential numbering
             
         Returns:
-            Tuple of (AeronauticalExtraction or None, combined raw output)
+            Tuple of (AeronauticalExtraction or None, combined raw output, list of step errors)
         """
         all_raw_outputs = []
+        step_errors: List[Dict[str, Any]] = []
         current_last_ids = dict(last_ids) if last_ids else {}
 
         # Step 1: Extract Entities (no dependencies)
@@ -169,7 +173,13 @@ class KEXExtractor:
             all_raw_outputs=all_raw_outputs
         )
         if not success:
-            return None, "\n\n".join(all_raw_outputs)
+            step_errors.append({
+                "step": "entities",
+                "step_num": 1,
+                "error": "Extraction failed after all retries",
+                "raw_output": entities_raw
+            })
+            entities = []
         available_entities = accumulated_entities + entities
 
         # Step 2: Extract Relationships (needs entities)
@@ -182,7 +192,13 @@ class KEXExtractor:
             all_raw_outputs=all_raw_outputs
         )
         if not success:
-            return None, "\n\n".join(all_raw_outputs)
+            step_errors.append({
+                "step": "relationships",
+                "step_num": 2,
+                "error": "Extraction failed after all retries",
+                "raw_output": rels_raw
+            })
+            relationships = []
         available_relationships = accumulated_relationships + relationships
 
         # Step 3: Extract Events (needs entities)
@@ -195,7 +211,13 @@ class KEXExtractor:
             all_raw_outputs=all_raw_outputs
         )
         if not success:
-            return None, "\n\n".join(all_raw_outputs)
+            step_errors.append({
+                "step": "events",
+                "step_num": 3,
+                "error": "Extraction failed after all retries",
+                "raw_output": events_raw
+            })
+            events = []
         available_events = accumulated_events + events
 
         # Step 4: Extract Rules (needs entities + relationships)
@@ -208,7 +230,13 @@ class KEXExtractor:
             all_raw_outputs=all_raw_outputs
         )
         if not success:
-            return None, "\n\n".join(all_raw_outputs)
+            step_errors.append({
+                "step": "rules",
+                "step_num": 4,
+                "error": "Extraction failed after all retries",
+                "raw_output": rules_raw
+            })
+            rules = []
         available_rules = accumulated_rules + rules
 
         # Step 5: Extract Procedures (needs entities + rules + events)
@@ -221,7 +249,13 @@ class KEXExtractor:
             all_raw_outputs=all_raw_outputs
         )
         if not success:
-            return None, "\n\n".join(all_raw_outputs)
+            step_errors.append({
+                "step": "procedures",
+                "step_num": 5,
+                "error": "Extraction failed after all retries",
+                "raw_output": procs_raw
+            })
+            procedures = []
 
         # Combine all results into AeronauticalExtraction
         combined_raw = "\n\n".join(all_raw_outputs)
@@ -233,10 +267,17 @@ class KEXExtractor:
                 rules=rules,
                 procedures=procedures
             )
-            return extraction, combined_raw
+            return extraction, combined_raw, step_errors
         except Exception as e:
             combined_raw = f"{combined_raw}\n\n=== FINAL ASSEMBLY ERROR ===\n{str(e)}"
-            return None, combined_raw
+            # Add final assembly error to step_errors
+            step_errors.append({
+                "step": "final_assembly",
+                "step_num": 6,
+                "error": str(e),
+                "raw_output": combined_raw
+            })
+            return None, combined_raw, step_errors
 
     def _run_extraction_step(
         self,

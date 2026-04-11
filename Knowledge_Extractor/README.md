@@ -8,6 +8,11 @@ Extract aeronautical knowledge (entities, relationships, rules, procedures) from
 - **Three Granularity Levels**: page, sentence, chunk (NLTK + LLM segmentation)
 - **Context-aware Extraction** with semantic embeddings (sentence-transformers)
 - **Expanded Context Types**: Entities, Rules, and Relationships for richer context
+- **Event Extraction**: Identifies events with triggers, actions, and conditions
+- **Procedure Extraction**: Captures multi-step procedures with required entities and events
+- **Two Extraction Modes**:
+  - **Joint mode**: Extracts all knowledge types in a single LLM call
+  - **Sequential mode**: Extracts knowledge types sequentially (entities → relationships → events → rules → procedures)
 - **External Chunks Source**: Load pre-generated chunks from another folder
 - **Resume Capability**: Start from specific page with previous entities as context
 - **Sequential ID Management**: E001, R001, RULE001, EV001, P001
@@ -89,15 +94,29 @@ pip install google-generativeai
 pip install anthropic
 ```
 
+#### Extraction Mode
+
+Choose between joint (default) or sequential extraction:
+
+```bash
+# Joint mode (default) - all knowledge types in single LLM call
+python -m Knowledge_Extractor document.pdf --extraction-mode joint
+
+# Sequential mode - extract types sequentially with accumulated context
+python -m Knowledge_Extractor document.pdf --extraction-mode sequential
+```
+
+**Note**: In sequential mode, `--no-rules` and `--no-relationships` options only apply to joint mode.
+
 #### Context Control
 
-Control which context types are included in the extraction prompt:
+Control which context types are included in the extraction prompt (joint mode only):
 
 ```bash
 # Include all context types (default)
 python -m Knowledge_Extractor document.pdf
 
-# Exclude specific types
+# Exclude specific types (joint mode only)
 python -m Knowledge_Extractor document.pdf --no-rules --no-relationships
 
 # Adjust context limits per type
@@ -243,12 +262,14 @@ Each page generates a JSON file (`pagina_N.json`):
       "ner": {
         "entities": [...],
         "relationships": [...],
-        "rules": [...]
+        "rules": [...],
+        "events": [...],
+        "procedures": [...]
       },
       "context": {
         "contexto_entidades_usadas": 10,
         "entidades_acumuladas_total": 45,
-        "last_ids": {"entities": "E012", "rules": "RULE003"}
+        "last_ids": {"entities": "E012", "rules": "RULE003", "events": "EV005", "procedures": "P003"}
       }
     }
   ],
@@ -264,6 +285,7 @@ Each page generates a JSON file (`pagina_N.json`):
 - `base_url`: API base URL for OpenAI-compatible providers (default: http://localhost:11434/v1 for Ollama)
 - `api_key`: API key for authentication (default: ollama)
 - `max_retries`: Retry attempts for failed extractions
+- `extraction_mode`: "joint" (default) or "sequential"
 
 ### Embedding Settings
 - `model_name`: sentence-transformers model

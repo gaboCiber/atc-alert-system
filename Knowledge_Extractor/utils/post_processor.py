@@ -180,6 +180,22 @@ class ExtractionPostProcessor:
                     "message": f"Entity '{entity_id}' has empty or N/A context"
                 })
             
+            # Normalize formal_definition: convert "N/A", "None", "" to null
+            formal_def = entity.get("formal_definition")
+            if formal_def in ("N/A", "None", "", None):
+                if formal_def in ("N/A", "None", ""):
+                    # Log normalization as a fix
+                    errors.append({
+                        "type": "normalized_field",
+                        "item_type": "entity",
+                        "item_index": idx,
+                        "item_id": entity_id,
+                        "original_item": entity,
+                        "message": f"Entity '{entity_id}' formal_definition was '{formal_def}' - normalized to null",
+                        "severity": "info"
+                    })
+                entity["formal_definition"] = None
+            
             result.append(entity)
             seen_ids.add(entity_id)
         

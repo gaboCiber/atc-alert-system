@@ -45,6 +45,13 @@ def main():
         default="joint",
         help="Extraction mode: joint (all types at once) or sequential (entities → relationships → events → rules → procedures). Default: joint"
     )
+
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="Maximum retry attempts for failed Instructor extractions (default: 3)"
+    )
     
     parser.add_argument(
         "--base-url",
@@ -159,6 +166,7 @@ def main():
         base_url=args.base_url,
         api_key=args.api_key,
         extraction_mode=args.extraction_mode,
+        max_retries=args.max_retries,
     )
     
     embedding_config = EmbeddingConfig(
