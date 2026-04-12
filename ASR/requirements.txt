@@ -1,0 +1,39 @@
+# ASR Module Requirements
+# Dependencias para transcripción, normalización y evaluación ASR
+
+# === Transcripción ===
+# OpenAI Whisper (modelo base)
+openai-whisper>=20231117
+
+# Faster Whisper (optimización CTranslate2)
+faster-whisper>=0.10.0
+
+# HuggingFace Transformers (para WhisperATC y otros modelos)
+transformers>=4.30.0
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Progreso y utilidades
+tqdm>=4.65.0
+
+# === Evaluación ===
+# Métricas WER (Word Error Rate)
+jiwer>=3.0.0
+
+# Lectura de documentos DOCX (ground truth)
+python-docx>=0.8.11
+
+# === Normalización ===
+# (usa solo librerías estándar de Python)
+
+# === Utilidades ===
+# Manipulación de paths y datos
+pathlib2>=2.3.7; python_version<"3.4"
+
+# === Opcionales ===
+# Para soporte de audio adicional
+# soundfile>=0.12.1
+# librosa>=0.10.0
+
+# Para aceleración GPU (si CUDA disponible)
+# nvidia-ml-py3>=7.352.0
