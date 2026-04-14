@@ -298,7 +298,7 @@ class KnowledgeExtractionPipeline:
                 chunks = self.text_segmenter.segment(page.text)
                 print(f"     └─ Split into {len(chunks)} sentences")
             elif self.config.granularity == "chunk":
-                sentences = list(filter(None, page.text.split("\n")))
+                sentences = list(filter(None, [ line.strip() for line in page.text.split("\n") ] ))
                 print(f"     └─ Found {len(sentences)} lines, attempting LLM segmentation...")
                 
                 if sentences:
