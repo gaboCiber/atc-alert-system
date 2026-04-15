@@ -4,7 +4,7 @@ Orquesta la transcripción de múltiples archivos con un modelo.
 """
 
 from pathlib import Path
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Dict
 import os
 
 from .base import BaseASRModel, TranscriptionResult
@@ -24,7 +24,8 @@ class TranscriptionPipeline:
         model: BaseASRModel,
         output_format: str = "csv",
         show_progress: bool = True,
-        append_mode: bool = False
+        append_mode: bool = False,
+        checkpoint_path: Optional[Path] = None
     ):
         """
         Inicializa el pipeline.
@@ -34,11 +35,75 @@ class TranscriptionPipeline:
             output_format: Formato de salida ("csv" o "json")
             show_progress: Mostrar barra de progreso durante transcripción
             append_mode: Si es True, agrega resultados a archivo existente (solo CSV)
+            checkpoint_path: Ruta al archivo de checkpoint para resumir transcripciones
         """
         self.model = model
         self.output_manager = OutputManager(format=output_format)
         self.show_progress = show_progress
         self.append_mode = append_mode
+        self.checkpoint_path = Path(checkpoint_path) if checkpoint_path else None
+        self._checkpoint_dict: Dict[str, TranscriptionResult] = {}
+        
+        # Cargar checkpoint si existe
+        if self.checkpoint_path:
+            self._load_checkpoint()
+    
+    def _load_checkpoint(self) -> None:
+        """Carga checkpoint existente si está disponible."""
+        if self.checkpoint_path and self.checkpoint_path.exists():
+            print(f"Cargando checkpoint desde: {self.checkpoint_path}")
+            checkpoint_results = self.output_manager.load_checkpoint(self.checkpoint_path)
+            if checkpoint_results:
+                for result in checkpoint_results:
+                    self._checkpoint_dict[result.file_path] = result
+                print(f"Checkpoint cargado: {len(self._checkpoint_dict)} transcripciones")
+    
+    def _filter_files_with_checkpoint(
+        self,
+        audio_files: List[Union[str, Path]]
+    ) -> List[str]:
+        """
+        Filtra archivos basado en el checkpoint.
+        
+        Args:
+            audio_files: Lista de rutas de archivos
+            
+        Returns:
+            Lista de archivos a procesar (nuevos o fallidos)
+        """
+        if not self._checkpoint_dict:
+            return [str(f) for f in audio_files]
+        
+        filtered = []
+        for file in audio_files:
+            file_str = str(file)
+            if file_str in self._checkpoint_dict:
+                result = self._checkpoint_dict[file_str]
+                # Reintentar si falló, saltar si fue exitoso
+                if result.metadata.get("error"):
+                    filtered.append(file_str)
+            else:
+                # Archivo nuevo, procesar
+                filtered.append(file_str)
+        
+        return filtered
+    
+    def _save_checkpoint_incremental(self, result: TranscriptionResult) -> None:
+        """
+        Guarda checkpoint incrementalmente después de cada transcripción.
+        
+        Args:
+            result: Resultado de transcripción a agregar
+        """
+        if not self.checkpoint_path:
+            return
+        
+        # Actualizar dict
+        self._checkpoint_dict[result.file_path] = result
+        
+        # Guardar checkpoint completo
+        all_results = list(self._checkpoint_dict.values())
+        self.output_manager.save_checkpoint(all_results, self.checkpoint_path)
     
     def run(
         self,
@@ -63,35 +128,74 @@ class TranscriptionPipeline:
         if not valid_files:
             raise ValueError("No se encontraron archivos de audio válidos")
         
+        # Filtrar archivos según checkpoint
+        files_to_process = self._filter_files_with_checkpoint(valid_files)
+        
+        if self._checkpoint_dict:
+            skipped = len(valid_files) - len(files_to_process)
+            print(f"Checkpoint: {skipped} archivos ya procesados, {len(files_to_process)} pendientes")
+        
+        if not files_to_process:
+            print("Todos los archivos ya están procesados según el checkpoint")
+            return list(self._checkpoint_dict.values())
+        
         # Cargar modelo si es necesario
         if not self.model.is_loaded():
             print(f"Cargando modelo: {self.model.model_name}...")
             self.model.load()
         
-        # Transcribir
-        print(f"Transcribiendo {len(valid_files)} archivos...")
-        results = self.model.transcribe_batch(
-            valid_files,
-            show_progress=self.show_progress
-        )
+        # Transcribir con checkpoint incremental
+        print(f"Transcribiendo {len(files_to_process)} archivos...")
+        results = []
         
-        # Guardar resultados
+        # Importar tqdm aquí para no depender de él globalmente
+        if self.show_progress:
+            try:
+                from tqdm import tqdm
+                iterator = tqdm(files_to_process, desc=f"Transcribiendo con {self.model.model_name}")
+            except ImportError:
+                iterator = files_to_process
+        else:
+            iterator = files_to_process
+        
+        for audio_path in iterator:
+            try:
+                result = self.model.transcribe(audio_path)
+                results.append(result)
+                # Guardar checkpoint incrementalmente
+                self._save_checkpoint_incremental(result)
+            except Exception as e:
+                # Crear resultado con error
+                error_result = TranscriptionResult(
+                    text="",
+                    file_path=str(audio_path),
+                    model_name=self.model.model_name,
+                    metadata={"error": str(e)}
+                )
+                results.append(error_result)
+                # Guardar checkpoint incluso si falló
+                self._save_checkpoint_incremental(error_result)
+        
+        # Combinar con checkpoint existente
+        all_results = list(self._checkpoint_dict.values())
+        
+        # Guardar resultados finales
         print(f"Guardando resultados en: {output_path}")
         if self.append_mode:
-            self.output_manager.append(results, output_path, model_column)
+            self.output_manager.append(all_results, output_path, model_column)
         else:
-            self.output_manager.save(results, output_path, model_column)
+            self.output_manager.save(all_results, output_path, model_column)
         
         # Reportar estadísticas
-        success_count = sum(1 for r in results if not r.metadata.get("error"))
-        error_count = len(results) - success_count
+        success_count = sum(1 for r in all_results if not r.metadata.get("error"))
+        error_count = len(all_results) - success_count
         
         print(f"\nTranscripción completada:")
-        print(f"  - Exitosos: {success_count}/{len(results)}")
+        print(f"  - Exitosos: {success_count}/{len(all_results)}")
         if error_count > 0:
             print(f"  - Errores: {error_count}")
         
-        return results
+        return all_results
     
     def run_directory(
         self,

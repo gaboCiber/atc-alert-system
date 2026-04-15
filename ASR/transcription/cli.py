@@ -39,6 +39,9 @@ Ejemplos:
   # Acumular múltiples modelos en un CSV
   python -m ASR.transcription.cli --model whisper --model-size large-v3 --input ./audio --output resultados.csv
   python -m ASR.transcription.cli --model faster-whisper --model-size large-v3 --input ./audio --output resultados.csv --append
+  
+  # Con checkpoint para resumir interrupciones
+  python -m ASR.transcription.cli --model whisper --model-size large-v3 --input ./audio --output resultados.json --checkpoint
         """
     )
     
@@ -97,6 +100,12 @@ Ejemplos:
         help="Agregar resultados al archivo existente en lugar de sobrescribir (solo CSV)"
     )
     
+    parser.add_argument(
+        "--checkpoint",
+        action="store_true",
+        help="Habilitar checkpoint para resumir transcripciones interrumpidas (guarda en <output>.checkpoint.json)"
+    )
+    
     # Opciones de transcripción
     parser.add_argument(
         "--device", "-d",
@@ -108,8 +117,8 @@ Ejemplos:
     parser.add_argument(
         "--prompt", "-p",
         choices=["default", "minimal", "extended", "none"],
-        default="default",
-        help="Prompt ATC a usar (default: default)"
+        default="none",
+        help="Prompt ATC a usar (default: none)"
     )
     
     parser.add_argument(
@@ -196,6 +205,12 @@ def main():
         print("Error: --append solo es compatible con formato CSV")
         return 1
     
+    # Calcular ruta del checkpoint si está habilitado
+    checkpoint_path = None
+    if args.checkpoint:
+        output_path_obj = Path(args.output)
+        checkpoint_path = output_path_obj.parent / f"{output_path_obj.stem}.checkpoint.json"
+    
     # Parsear extensiones
     extensions = tuple(args.extensions.split(","))
     
@@ -209,7 +224,8 @@ def main():
             model=model,
             output_format=output_format,
             show_progress=not args.no_progress,
-            append_mode=args.append
+            append_mode=args.append,
+            checkpoint_path=checkpoint_path
         )
         
         # Ejecutar

@@ -6,7 +6,7 @@ Soporta formatos CSV y JSON.
 import json
 import csv
 from pathlib import Path
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Optional
 from datetime import datetime
 
 import pandas as pd
@@ -181,6 +181,91 @@ class OutputManager:
         
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+    
+    def save_checkpoint(
+        self,
+        results: List[TranscriptionResult],
+        checkpoint_path: Union[str, Path]
+    ) -> None:
+        """
+        Guarda checkpoint con estado actual de transcripciones.
+        
+        Usa el mismo formato que JSON normal para permitir resumen.
+        Sobrescribe el archivo completo con el estado actual.
+        
+        Args:
+            results: Lista de resultados de transcripción
+            checkpoint_path: Ruta al archivo de checkpoint
+        """
+        checkpoint_path = Path(checkpoint_path)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Usar el mismo formato que _save_json
+        data = {
+            "metadata": {
+                "export_date": datetime.now().isoformat(),
+                "format": "checkpoint",
+                "num_results": len(results)
+            },
+            "results": []
+        }
+        
+        for result in results:
+            entry = {
+                "file_path": result.file_path,
+                "model_name": result.model_name,
+                "text": result.text,
+            }
+            
+            # Agregar campos opcionales si existen
+            if result.timestamps:
+                entry["timestamps"] = result.timestamps
+            if result.confidence is not None:
+                entry["confidence"] = result.confidence
+            if result.duration is not None:
+                entry["duration"] = result.duration
+            if result.metadata:
+                entry["metadata"] = result.metadata
+            
+            data["results"].append(entry)
+        
+        with open(checkpoint_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    
+    def load_checkpoint(
+        self,
+        checkpoint_path: Union[str, Path]
+    ) -> Optional[List[TranscriptionResult]]:
+        """
+        Carga checkpoint existente.
+        
+        Args:
+            checkpoint_path: Ruta al archivo de checkpoint
+            
+        Returns:
+            Lista de TranscriptionResult si el archivo existe, None si no
+        """
+        checkpoint_path = Path(checkpoint_path)
+        
+        if not checkpoint_path.exists():
+            return None
+        
+        data = self.load_json(checkpoint_path)
+        
+        results = []
+        for entry in data.get("results", []):
+            result = TranscriptionResult(
+                text=entry.get("text", ""),
+                file_path=entry.get("file_path", ""),
+                model_name=entry.get("model_name", ""),
+                timestamps=entry.get("timestamps"),
+                confidence=entry.get("confidence"),
+                duration=entry.get("duration"),
+                metadata=entry.get("metadata", {})
+            )
+            results.append(result)
+        
+        return results
     
     @staticmethod
     def load_csv(input_path: Union[str, Path]) -> List[Dict[str, str]]:
