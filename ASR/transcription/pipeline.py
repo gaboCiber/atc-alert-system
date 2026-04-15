@@ -23,7 +23,8 @@ class TranscriptionPipeline:
         self,
         model: BaseASRModel,
         output_format: str = "csv",
-        show_progress: bool = True
+        show_progress: bool = True,
+        append_mode: bool = False
     ):
         """
         Inicializa el pipeline.
@@ -32,10 +33,12 @@ class TranscriptionPipeline:
             model: Instancia de un modelo ASR (WhisperModel, HuggingFaceModel, etc.)
             output_format: Formato de salida ("csv" o "json")
             show_progress: Mostrar barra de progreso durante transcripción
+            append_mode: Si es True, agrega resultados a archivo existente (solo CSV)
         """
         self.model = model
         self.output_manager = OutputManager(format=output_format)
         self.show_progress = show_progress
+        self.append_mode = append_mode
     
     def run(
         self,
@@ -74,7 +77,10 @@ class TranscriptionPipeline:
         
         # Guardar resultados
         print(f"Guardando resultados en: {output_path}")
-        self.output_manager.save(results, output_path, model_column)
+        if self.append_mode:
+            self.output_manager.append(results, output_path, model_column)
+        else:
+            self.output_manager.save(results, output_path, model_column)
         
         # Reportar estadísticas
         success_count = sum(1 for r in results if not r.metadata.get("error"))

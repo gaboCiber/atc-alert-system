@@ -35,6 +35,10 @@ Ejemplos:
   
   # HuggingFace con modelo personalizado
   python -m ASR.transcription.cli --model huggingface --hf-model "jlvdoorn/whisper-large-v3-atco2-asr" --input ./audio --output resultados.csv
+  
+  # Acumular múltiples modelos en un CSV
+  python -m ASR.transcription.cli --model whisper --model-size large-v3 --input ./audio --output resultados.csv
+  python -m ASR.transcription.cli --model faster-whisper --model-size large-v3 --input ./audio --output resultados.csv --append
         """
     )
     
@@ -85,6 +89,12 @@ Ejemplos:
         "--format", "-f",
         choices=["csv", "json"],
         help="Formato de salida (default: inferir de la extensión)"
+    )
+    
+    parser.add_argument(
+        "--append", "-a",
+        action="store_true",
+        help="Agregar resultados al archivo existente en lugar de sobrescribir (solo CSV)"
     )
     
     # Opciones de transcripción
@@ -181,6 +191,11 @@ def main():
         if output_format not in ["csv", "json"]:
             output_format = "csv"
     
+    # Validar append mode
+    if args.append and output_format != "csv":
+        print("Error: --append solo es compatible con formato CSV")
+        return 1
+    
     # Parsear extensiones
     extensions = tuple(args.extensions.split(","))
     
@@ -192,7 +207,8 @@ def main():
     pipeline = TranscriptionPipeline(
         model=model,
         output_format=output_format,
-        show_progress=not args.no_progress
+        show_progress=not args.no_progress,
+        append_mode=args.append
     )
     
     # Ejecutar

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Union
 from datetime import datetime
 
+import pandas as pd
+
 from ..base import TranscriptionResult
 
 
@@ -51,20 +53,52 @@ class OutputManager:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         if self.format == "csv":
-            self._save_csv(results, output_path, model_column)
+            self._save_csv(results, output_path, model_column, mode='w')
         elif self.format == "json":
             self._save_json(results, output_path)
+    
+    def append(
+        self,
+        results: List[TranscriptionResult],
+        output_path: Union[str, Path],
+        model_column: str = "model"
+    ) -> None:
+        """
+        Agrega resultados a un archivo existente.
+        
+        Si el archivo no existe, lo crea. Si existe, combina los nuevos resultados
+        con los existentes (útil para acumular transcripciones de múltiples modelos).
+        
+        Args:
+            results: Lista de resultados de transcripción
+            output_path: Ruta al archivo de salida
+            model_column: Nombre de la columna para el modelo (solo CSV)
+        """
+        if self.format != "csv":
+            raise ValueError("Append mode is only supported for CSV format")
+        
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        self._save_csv(results, output_path, model_column, mode='a')
     
     def _save_csv(
         self,
         results: List[TranscriptionResult],
         output_path: Path,
-        model_column: str
+        model_column: str,
+        mode: str = 'w'
     ) -> None:
         """
-        Guarda los resultados en formato CSV.
+        Guarda los resultados en formato CSV usando pandas.
         
         Formato: Una fila por modelo, columnas son archivos de audio.
+        
+        Args:
+            results: Lista de resultados de transcripción
+            output_path: Ruta al archivo de salida
+            model_column: Nombre de la columna para el modelo
+            mode: Modo de escritura ('w' para sobrescribir, 'a' para append)
         """
         # Agrupar resultados por modelo
         model_results: Dict[str, Dict[str, str]] = {}
@@ -83,20 +117,29 @@ class OutputManager:
         # Ordenar archivos para consistencia
         sorted_files = sorted(all_files)
         
-        # Escribir CSV
-        with open(output_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            
-            # Encabezado
-            header = [model_column] + sorted_files
-            writer.writerow(header)
-            
-            # Datos
-            for model in sorted(model_results.keys()):
-                row = [model]
-                for file in sorted_files:
-                    row.append(model_results[model].get(file, ""))
-                writer.writerow(row)
+        # Crear DataFrame
+        data = []
+        for model in sorted(model_results.keys()):
+            row = {model_column: model}
+            for file in sorted_files:
+                row[file] = model_results[model].get(file, "")
+            data.append(row)
+        
+        df = pd.DataFrame(data)
+        
+        # Reordenar columnas: model_column primero, luego archivos ordenados
+        columns = [model_column] + sorted_files
+        df = df.reindex(columns=columns)
+        
+        # Guardar CSV
+        if mode == 'a' and output_path.exists():
+            # Append: leer existente y combinar
+            existing_df = pd.read_csv(output_path)
+            combined_df = pd.concat([existing_df, df], ignore_index=True)
+            combined_df.to_csv(output_path, index=False)
+        else:
+            # Sobrescribir o crear nuevo
+            df.to_csv(output_path, index=False)
     
     def _save_json(
         self,
