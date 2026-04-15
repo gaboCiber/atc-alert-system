@@ -73,6 +73,21 @@ class HuggingFaceModel(BaseASRModel):
         self._pipe = pipeline(**pipe_kwargs)
         self._is_loaded = True
     
+    def unload(self) -> None:
+        """Descarga el modelo de la memoria."""
+        if self._pipe is not None:
+            del self._pipe
+            self._pipe = None
+            self._is_loaded = False
+            
+            # Limpiar caché de CUDA si está disponible
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except ImportError:
+                pass
+    
     def transcribe(self, audio_path: Union[str, Path]) -> TranscriptionResult:
         """
         Transcribe un archivo de audio.

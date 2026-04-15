@@ -62,6 +62,15 @@ class BaseASRModel(ABC):
         pass
     
     @abstractmethod
+    def unload(self) -> None:
+        """
+        Descarga el modelo de la memoria.
+        
+        Libera recursos (GPU/CPU) después de terminar de usar el modelo.
+        """
+        pass
+    
+    @abstractmethod
     def transcribe(self, audio_path: Union[str, Path]) -> TranscriptionResult:
         """
         Transcribe un archivo de audio.

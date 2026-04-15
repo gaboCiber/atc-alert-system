@@ -60,6 +60,21 @@ class WhisperModel(BaseASRModel):
         self._model = whisper.load_model(self.model_name).to(device)
         self._is_loaded = True
     
+    def unload(self) -> None:
+        """Descarga el modelo de la memoria."""
+        if self._model is not None:
+            del self._model
+            self._model = None
+            self._is_loaded = False
+            
+            # Limpiar caché de CUDA si está disponible
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except ImportError:
+                pass
+    
     def transcribe(self, audio_path: Union[str, Path]) -> TranscriptionResult:
         """
         Transcribe un archivo de audio.

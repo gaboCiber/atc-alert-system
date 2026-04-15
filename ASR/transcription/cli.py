@@ -203,35 +203,41 @@ def main():
     print(f"Creando modelo: {args.model}")
     model = create_model(args)
     
-    # Crear pipeline
-    pipeline = TranscriptionPipeline(
-        model=model,
-        output_format=output_format,
-        show_progress=not args.no_progress,
-        append_mode=args.append
-    )
-    
-    # Ejecutar
-    input_path = Path(args.input)
-    
-    if input_path.is_dir():
-        # Procesar directorio
-        results = pipeline.run_directory(
-            directory=input_path,
-            output_path=args.output,
-            extensions=extensions,
-            recursive=True
+    try:
+        # Crear pipeline
+        pipeline = TranscriptionPipeline(
+            model=model,
+            output_format=output_format,
+            show_progress=not args.no_progress,
+            append_mode=args.append
         )
-    else:
-        # Procesar archivos individuales (input puede ser lista separada por comas)
-        files = [f.strip() for f in args.input.split(",")]
-        results = pipeline.run(
-            audio_files=files,
-            output_path=args.output
-        )
-    
-    print(f"\n✅ Transcripción completada: {args.output}")
-    return 0
+        
+        # Ejecutar
+        input_path = Path(args.input)
+        
+        if input_path.is_dir():
+            # Procesar directorio
+            results = pipeline.run_directory(
+                directory=input_path,
+                output_path=args.output,
+                extensions=extensions,
+                recursive=True
+            )
+        else:
+            # Procesar archivos individuales (input puede ser lista separada por comas)
+            files = [f.strip() for f in args.input.split(",")]
+            results = pipeline.run(
+                audio_files=files,
+                output_path=args.output
+            )
+        
+        print(f"\n✅ Transcripción completada: {args.output}")
+        return 0
+    finally:
+        # Descargar modelo de la memoria (siempre se ejecuta)
+        if model.is_loaded():
+            print("Descargando modelo de la memoria...")
+            model.unload()
 
 
 if __name__ == "__main__":
