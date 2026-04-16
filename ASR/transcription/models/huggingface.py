@@ -23,6 +23,7 @@ class HuggingFaceModel(BaseASRModel):
         device: str = "auto",
         prompt: Optional[str] = None,
         return_timestamps: bool = False,
+        chunk_length_s: Optional[int] = None,
         **kwargs
     ):
         """
@@ -33,10 +34,12 @@ class HuggingFaceModel(BaseASRModel):
             device: Dispositivo ("cpu", "cuda", "auto")
             prompt: Prompt opcional (algunos modelos HF lo ignoran)
             return_timestamps: Devolver timestamps en la transcripción
+            chunk_length_s: Longitud del chunk en segundos (None para deshabilitar chunking)
             **kwargs: Parámetros adicionales para el pipeline
         """
         super().__init__(model_name=model_name, device=device, prompt=prompt, **kwargs)
         self.return_timestamps = return_timestamps
+        self.chunk_length_s = chunk_length_s
         self._pipe = None
     
     def load(self) -> None:
@@ -65,6 +68,10 @@ class HuggingFaceModel(BaseASRModel):
             "model": self.model_name,
             "device": device_map,
         }
+        
+        # Agregar chunk_length_s si está configurado (evita error de num_frames)
+        if self.chunk_length_s is not None:
+            pipe_kwargs["chunk_length_s"] = self.chunk_length_s
         
         # Agregar torch_dtype si está configurado
         if "torch_dtype" in self.config:
@@ -108,6 +115,10 @@ class HuggingFaceModel(BaseASRModel):
         
         if self.return_timestamps:
             inference_kwargs["return_timestamps"] = True
+        
+        # Deshabilitar chunking si chunk_length_s es None (evita error de num_frames)
+        if self.chunk_length_s is None:
+            inference_kwargs["chunk_length_s"] = None
         
         # Agregar otros parámetros del config
         inference_kwargs.update({
@@ -159,6 +170,7 @@ class WhisperATCModel(HuggingFaceModel):
         model_version: str = "v3",
         device: str = "auto",
         return_timestamps: bool = True,
+        chunk_length_s: Optional[int] = None,
         **kwargs
     ):
         """
@@ -168,6 +180,7 @@ class WhisperATCModel(HuggingFaceModel):
             model_version: Versión del modelo ("v2" o "v3")
             device: Dispositivo
             return_timestamps: Devolver timestamps
+            chunk_length_s: Longitud del chunk (None para deshabilitar, por defecto None por error de num_frames)
             **kwargs: Parámetros adicionales
         """
         model_name = f"jlvdoorn/whisper-large-{model_version}-atco2-asr"
@@ -177,5 +190,6 @@ class WhisperATCModel(HuggingFaceModel):
             device=device,
             prompt=None,  # WhisperATC no necesita prompt
             return_timestamps=return_timestamps,
+            chunk_length_s=chunk_length_s,  # None por defecto para evitar error de num_frames
             **kwargs
         )

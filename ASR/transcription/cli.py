@@ -61,10 +61,23 @@ Ejemplos:
         help="Tamaño del modelo Whisper (default: base)"
     )
     
-    # Opciones de HuggingFace
+    # Opciones específicas de HuggingFace
     parser.add_argument(
         "--hf-model",
-        help="ID del modelo en HuggingFace (ej: jlvdoorn/whisper-large-v3-atco2-asr)"
+        help="ID del modelo HuggingFace (solo si --model=huggingface)"
+    )
+    
+    parser.add_argument(
+        "--chunk-length-s",
+        type=int,
+        default=None,
+        help="Longitud del chunk en segundos para HuggingFace (None deshabilita chunking, por defecto None para evitar error de num_frames)"
+    )
+    
+    parser.add_argument(
+        "--hf-config",
+        action='append',
+        help="Configuración adicional para HuggingFace (ej: --hf-config torch_dtype=float16)"
     )
     
     # Opciones de WhisperATC
@@ -159,7 +172,8 @@ def create_model(args):
         model = WhisperATCModel(
             model_version=args.version,
             device=args.device,
-            return_timestamps=args.timestamps
+            return_timestamps=args.timestamps,
+            chunk_length_s=args.chunk_length_s
         )
     
     elif args.model == "huggingface":
@@ -170,7 +184,8 @@ def create_model(args):
             model_name=args.hf_model,
             device=args.device,
             prompt=prompt,
-            return_timestamps=args.timestamps
+            return_timestamps=args.timestamps,
+            chunk_length_s=args.chunk_length_s
         )
     
     elif args.model == "faster-whisper":
