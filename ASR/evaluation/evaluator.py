@@ -6,6 +6,10 @@ Calcula WER (Word Error Rate) y otras métricas entre ground truth y prediccione
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 import warnings
+import pandas as pd
+
+from .data_loaders import BaseDataLoader
+from ..normalization import ATCTextNormalizer
 
 # Intentar importar jiwer, sino usar implementación básica
 try:
@@ -58,11 +62,31 @@ class ASREvaluator:
     Args:
         use_jiwer: Si usar jiwer (recomendado) o implementación básica
         normalize_words: Si aplicar transformaciones adicionales a palabras
+        use_atc_normalizer: Si usar ATCTextNormalizer para normalización ATC
     """
     
-    def __init__(self, use_jiwer: bool = True, normalize_words: bool = True):
+    def __init__(
+        self,
+        use_jiwer: bool = True,
+        normalize_words: bool = True,
+        use_atc_normalizer: bool = True
+    ):
         self.use_jiwer = use_jiwer and JIWER_AVAILABLE
         self.normalize_words = normalize_words
+        self.use_atc_normalizer = use_atc_normalizer
+        
+        # Crear normalizador ATC si está habilitado
+        if self.use_atc_normalizer:
+            self._normalizer = ATCTextNormalizer(
+                expand_callsigns=True,
+                expand_numbers=True,
+                expand_icao=False,
+                normalize_terminology=True,
+                remove_punctuation=True,
+                lowercase=True
+            )
+        else:
+            self._normalizer = None
     
     def calculate_wer(
         self, 
@@ -97,18 +121,21 @@ class ASREvaluator:
     def _preprocess_text(self, text: str) -> List[str]:
         """
         Preprocesa texto para comparación.
+        
+        Si use_atc_normalizer es True, usa ATCTextNormalizer para normalizar
+        el texto antes de dividir en palabras.
         """
-        if not text:
+        if not text or pd.isna(text):
             return []
         
-        # Convertir a minúsculas y split por espacios
-        words = text.lower().split()
+        # Usar normalizador ATC si está habilitado
+        if self.use_atc_normalizer and self._normalizer:
+            normalized_text = self._normalizer.normalize(text)
+        else:
+            normalized_text = text
         
-        if self.normalize_words:
-            # Remover puntuación básica de cada palabra
-            words = [w.strip('.,!?;:') for w in words]
-            # Filtrar palabras vacías
-            words = [w for w in words if w]
+        # Convertir a minúsculas y split por espacios
+        words = normalized_text.lower().split()
         
         return words
     
@@ -247,39 +274,49 @@ class ASREvaluator:
         
         return result
     
-    def evaluate_model(
+    def evaluate_model_with_loader(
         self,
         model_name: str,
-        ground_truth: Dict[str, str],
-        predictions: Dict[str, str],
+        data_loader: BaseDataLoader,
+        ground_truth_path: str,
+        predictions_path: str,
         detailed: bool = True
     ) -> List[ASREvaluationResult]:
         """
-        Evalúa un modelo completo contra ground truth.
+        Evalúa un modelo usando un data loader.
         
         Args:
             model_name: Nombre del modelo
-            ground_truth: Dict {timestamp: texto_ref}
-            predictions: Dict {timestamp: texto_pred}
+            data_loader: Instancia de BaseDataLoader (EcnaDataLoader o Atco2DataLoader)
+            ground_truth_path: Ruta al ground truth (DOCX o directorio)
+            predictions_path: Ruta al CSV de transcripciones
             detailed: Si incluir métricas detalladas
             
         Returns:
-            Lista de ASREvaluationResult por timestamp
+            Lista de ASREvaluationResult por ID
         """
+        ground_truth = data_loader.load_ground_truth(ground_truth_path)
+        all_predictions = data_loader.load_transcriptions(predictions_path)
+        
+        if model_name not in all_predictions:
+            raise ValueError(f"Model '{model_name}' not found in transcriptions")
+        
+        predictions = all_predictions[model_name]
+        
         results = []
         
-        # Unir todos los timestamps
-        all_timestamps = set(ground_truth.keys()) & set(predictions.keys())
+        # Unir todos los IDs
+        all_ids = set(ground_truth.keys()) & set(predictions.keys())
         
-        for ts in sorted(all_timestamps):
-            ref = ground_truth.get(ts, "")
-            hyp = predictions.get(ts, "")
+        for data_id in sorted(all_ids):
+            ref = ground_truth.get(data_id, "")
+            hyp = predictions.get(data_id, "")
             
             metrics = self.calculate_wer(ref, hyp, detailed=detailed)
             
             result = ASREvaluationResult(
                 model_name=model_name,
-                timestamp=ts,
+                timestamp=data_id,  # Using timestamp field for the data ID
                 reference=ref,
                 hypothesis=hyp,
                 wer=metrics['wer'],
@@ -295,28 +332,33 @@ class ASREvaluator:
         
         return results
     
-    def evaluate_all_models(
+    def evaluate_all_models_with_loader(
         self,
-        ground_truth: Dict[str, str],
-        all_predictions: Dict[str, Dict[str, str]],
+        data_loader: BaseDataLoader,
+        ground_truth_path: str,
+        transcriptions_path: str,
         detailed: bool = True
     ) -> Dict[str, List[ASREvaluationResult]]:
         """
-        Evalúa todos los modelos.
+        Evalúa todos los modelos usando un data loader.
         
         Args:
-            ground_truth: Dict {timestamp: texto_ref}
-            all_predictions: Dict {modelo: {timestamp: texto_pred}}
+            data_loader: Instancia de BaseDataLoader (EcnaDataLoader o Atco2DataLoader)
+            ground_truth_path: Ruta al ground truth (DOCX o directorio)
+            transcriptions_path: Ruta al CSV de transcripciones
             detailed: Si incluir métricas detalladas
             
         Returns:
             Dict {modelo: [ASREvaluationResult]}
         """
+        ground_truth = data_loader.load_ground_truth(ground_truth_path)
+        all_predictions = data_loader.load_transcriptions(transcriptions_path)
+        
         results = {}
         
         for model_name, predictions in all_predictions.items():
-            results[model_name] = self.evaluate_model(
-                model_name, ground_truth, predictions, detailed
+            results[model_name] = self.evaluate_model_with_loader(
+                model_name, data_loader, ground_truth_path, transcriptions_path, detailed
             )
         
         return results
@@ -365,69 +407,67 @@ class ASREvaluator:
             aggregated['total_deletions'] = sum(e['deletions'] for e in all_errors)
         
         return aggregated
-
-
-def print_evaluation_report(
-    results: Dict[str, List[ASREvaluationResult]],
-    show_samples: bool = False
-):
-    """
-    Imprime un reporte de evaluación formateado.
     
-    Args:
-        results: Dict {modelo: [ASREvaluationResult]}
-        show_samples: Si mostrar ejemplos individuales
-    """
-    print("=" * 80)
-    print("REPORTE DE EVALUACIÓN ASR")
-    print("=" * 80)
+    def print_evaluation_report(
+        self,
+        results: Dict[str, List[ASREvaluationResult]],
+        show_samples: bool = False
+    ):
+        """
+        Imprime un reporte de evaluación formateado.
+        
+        Args:
+            results: Dict {modelo: [ASREvaluationResult]}
+            show_samples: Si mostrar ejemplos individuales
+        """
+        print("=" * 80)
+        print("REPORTE DE EVALUACIÓN ASR")
+        print("=" * 80)
+        
+        for model_name, model_results in results.items():
+            print(f"\n{'=' * 80}")
+            print(f"Modelo: {model_name}")
+            print(f"{'=' * 80}")
+            
+            # Métricas agregadas
+            agg = self.aggregate_metrics(model_results)
+            print(f"  WER Promedio:     {agg['average_wer']:.2%}")
+            print(f"  Total palabras ref: {agg['total_ref_words']}")
+            print(f"  Total palabras hyp: {agg['total_hyp_words']}")
+            print(f"  Muestras:         {agg['num_samples']}")
+            
+            if 'total_substitutions' in agg:
+                print(f"\n  Desglose de errores:")
+                print(f"    Sustituciones:  {agg['total_substitutions']}")
+                print(f"    Inserciones:   {agg['total_insertions']}")
+                print(f"    Eliminaciones:  {agg['total_deletions']}")
+            
+            if show_samples:
+                print(f"\n  Muestras individuales:")
+                for r in model_results:
+                    print(f"\n    Timestamp: {r.timestamp}")
+                    print(f"    WER: {r.wer:.2%}")
+                    print(f"    Ref: {r.reference}")
+                    print(f"    Hyp: {r.hypothesis}")
+                    print(f"    Ref (Normalized): {' '.join(self._preprocess_text(r.reference))}")
+                    print(f"    Hyp (Normalized): {' '.join(self._preprocess_text(r.hypothesis))}")
     
-    evaluator = ASREvaluator()
-    
-    for model_name, model_results in results.items():
         print(f"\n{'=' * 80}")
-        print(f"Modelo: {model_name}")
-        print(f"{'=' * 80}")
+    
+    def compare_models(
+        self,
+        results: Dict[str, List[ASREvaluationResult]]
+    ) -> List[Tuple[str, float]]:
+        """
+        Compara modelos por WER promedio.
         
-        # Métricas agregadas
-        agg = evaluator.aggregate_metrics(model_results)
-        print(f"  WER Promedio:     {agg['average_wer']:.2%}")
-        print(f"  Total palabras ref: {agg['total_ref_words']}")
-        print(f"  Total palabras hyp: {agg['total_hyp_words']}")
-        print(f"  Muestras:         {agg['num_samples']}")
+        Returns:
+            Lista de (modelo, wer_promedio) ordenada por WER
+        """
+        comparison = []
+        for model_name, model_results in results.items():
+            agg = self.aggregate_metrics(model_results)
+            comparison.append((model_name, agg['average_wer']))
         
-        if 'total_substitutions' in agg:
-            print(f"\n  Desglose de errores:")
-            print(f"    Sustituciones:  {agg['total_substitutions']}")
-            print(f"    Inserciones:   {agg['total_insertions']}")
-            print(f"    Eliminaciones:  {agg['total_deletions']}")
-        
-        if show_samples:
-            print(f"\n  Muestras individuales:")
-            for r in model_results:
-                print(f"\n    Timestamp: {r.timestamp}")
-                print(f"    WER: {r.wer:.2%}")
-                print(f"    Ref: {r.reference}")
-                print(f"    Hyp: {r.hypothesis}")
-    
-    print(f"\n{'=' * 80}")
-
-
-def compare_models(
-    results: Dict[str, List[ASREvaluationResult]]
-) -> List[Tuple[str, float]]:
-    """
-    Compara modelos por WER promedio.
-    
-    Returns:
-        Lista de (modelo, wer_promedio) ordenada por WER
-    """
-    evaluator = ASREvaluator()
-    
-    comparison = []
-    for model_name, model_results in results.items():
-        agg = evaluator.aggregate_metrics(model_results)
-        comparison.append((model_name, agg['average_wer']))
-    
-    # Ordenar por WER (menor es mejor)
-    return sorted(comparison, key=lambda x: x[1])
+        # Ordenar por WER (menor es mejor)
+        return sorted(comparison, key=lambda x: x[1])
