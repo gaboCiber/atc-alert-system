@@ -95,15 +95,13 @@ class TranscriptionPipeline:
         Args:
             result: Resultado de transcripción a agregar
         """
-        if not self.checkpoint_path:
-            return
-        
-        # Actualizar dict
+        # Actualizar dict (siempre, independientemente de checkpoint_path)
         self._checkpoint_dict[result.file_path] = result
         
-        # Guardar checkpoint completo
-        all_results = list(self._checkpoint_dict.values())
-        self.output_manager.save_checkpoint(all_results, self.checkpoint_path)
+        # Guardar checkpoint completo solo si hay ruta
+        if self.checkpoint_path:
+            all_results = list(self._checkpoint_dict.values())
+            self.output_manager.save_checkpoint(all_results, self.checkpoint_path)
     
     def run(
         self,
