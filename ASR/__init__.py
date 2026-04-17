@@ -6,8 +6,9 @@ from .normalization import ATCTextNormalizer, quick_normalize
 from .evaluation import (
     ASREvaluator,
     ASREvaluationResult,
-    load_ground_truth,
-    load_transcriptions,
+    BaseDataLoader,
+    EcnaDataLoader,
+    Atco2DataLoader,
 )
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     'quick_normalize',
     'ASREvaluator',
     'ASREvaluationResult',
-    'load_ground_truth',
-    'load_transcriptions',
+    'BaseDataLoader',
+    'EcnaDataLoader',
+    'Atco2DataLoader',
 ]

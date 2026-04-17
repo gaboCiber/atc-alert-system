@@ -183,6 +183,21 @@ python -m ASR.transcription.cli \
     --device cuda \
     --input ./audio \
     --output results.csv
+
+# Append mode (add results to existing CSV)
+python -m ASR.transcription.cli \
+    --model whisperatc \
+    --input ./new_audio \
+    --output results.csv \
+    --append
+
+# Checkpoint mode (resume if interrupted)
+python -m ASR.transcription.cli \
+    --model whisper \
+    --model-size large-v3 \
+    --input ./audio \
+    --output results.json \
+    --checkpoint
 ```
 
 ### CLI Parameters
@@ -192,11 +207,14 @@ python -m ASR.transcription.cli \
 | `--model` | whisper, whisperatc, huggingface, faster-whisper | Model type |
 | `--model-size` | tiny, base, small, medium, large-v1/2/3 | Whisper size |
 | `--hf-model` | string | HuggingFace model ID |
+| `--chunk-length-s` | int | Chunk length in seconds for HuggingFace (None disables chunking, default: None) |
 | `--version` | v2, v3 | WhisperATC version |
 | `--device` | auto, cpu, cuda | Device |
 | `--prompt` | default, minimal, extended, none | Prompt type |
 | `--format` | csv, json | Output format |
 | `--timestamps` | flag | Include timestamps |
+| `--append` | flag | Append results to existing file (CSV only) |
+| `--checkpoint` | flag | Enable checkpoint for resuming interrupted transcriptions |
 | `--no-progress` | flag | Hide progress bar |
 | `--extensions` | string | Extensions (default: .mp3,.wav,.flac,.m4a,.ogg,.mkv) |
 
@@ -239,13 +257,13 @@ ATC text normalization for comparison and WER evaluation.
 
 ### Features
 
-- Callsign expansion: `JBU1676` → `jetblue one six seven six`
-- Number expansion: `FL340` → `flight level three four zero`
-- Frequency expansion: `118.5` → `one one eight point five`
-- ATC terminology normalization
-- Optional ICAO expansion: `BEMOL` → `bravo echo mike oscar lima`
-- Punctuation removal
-- Lowercase conversion
+- **Callsign expansion**: `JBU1676` → `jetblue one six seven six`
+- **Number expansion** (all digits): `FL340` → `flight level three four zero`, `877561` → `eight seven seven five six one`
+- **Runway number expansion**: `16R` → `one six right`, `16L` → `one six left`
+- **Frequency expansion**: `118.5` → `one one eight point five`
+- **ATC terminology normalization**: `climb` → `climb`, `descend` → `descend`, etc.
+- **Optional ICAO expansion**: `BEMOL` → `bravo echo mike oscar lima`
+- **Punctuation removal** and **lowercase conversion**
 
 ### Usage
 
@@ -262,9 +280,14 @@ normalizer = ATCTextNormalizer(
     lowercase=True               # Convert to lowercase
 )
 
-text = "JBU1676 climb FL340 maintain heading 090"
+text = "JBU1676 climb FL340 maintain heading 090, runway 16R"
 normalized = normalizer.normalize(text)
-# Result: "jetblue one six seven six climb flight level three four zero maintain heading zero niner zero"
+# Result: "jetblue one six seven six climb flight level three four zero maintain heading zero niner zero runway one six right"
+
+# Full number expansion works with any digit sequence
+text = "China 877561, established on the localizer"
+normalizer.normalize(text)
+# Result: "china eight seven seven five six one established on the localizer"
 
 # Quick function with default values
 normalized = quick_normalize(text)
@@ -291,39 +314,61 @@ from ASR.normalization import (
 
 ASR transcription evaluation against ground truth using WER and other metrics.
 
-### Basic Usage
+### Data Loaders (OOP-Based)
+
+The evaluation module now uses an object-oriented approach with data loaders for different datasets:
+
+| Loader | Description | Use Case |
+|--------|-------------|----------|
+| `EcnaDataLoader` | Loader for ECNA dataset format | ECNA ground truth (DOCX + audio) |
+| `Atco2DataLoader` | Loader for ATCO2 dataset format | ATCO2 structured data |
+| `BaseDataLoader` | Abstract base for custom loaders | Extend for new datasets |
+
+### Basic Usage (New API with Loaders)
 
 ```python
-from ASR.evaluation import ASREvaluator, load_ground_truth, load_transcriptions_by_timestamp, align_data
-from ASR.normalization import ATCTextNormalizer
+from ASR.evaluation import ASREvaluator, EcnaDataLoader, Atco2DataLoader
 
-# 1. Load ground truth from DOCX
-ground_truth_raw = load_ground_truth("./ground_truth.docx")
-# {timestamp: full_text, ...}
+# Create data loader for your dataset
+loader = EcnaDataLoader()  # or Atco2DataLoader()
 
-# 2. Load transcriptions from CSV (Whisper format)
-transcriptions_raw = load_transcriptions_by_timestamp("./transcriptions.csv")
-# {model: {timestamp: text, ...}, ...}
+# Initialize evaluator with automatic ATC normalization
+evaluator = ASREvaluator(
+    use_jiwer=True,           # Use jiwer for WER calculation
+    use_atc_normalizer=True  # Automatically normalize with ATCTextNormalizer
+)
 
-# 3. Normalize
-normalizer = ATCTextNormalizer()
-ground_truth = {ts: normalizer.normalize(txt) for ts, txt in ground_truth_raw.items()}
-transcriptions = {
-    model: {ts: normalizer.normalize(txt) for ts, txt in model_data.items()}
-    for model, model_data in transcriptions_raw.items()
-}
-
-# 4. Evaluate
-evaluator = ASREvaluator(use_jiwer=True)
-results = evaluator.evaluate_all_models(
-    ground_truth=ground_truth,
-    transcriptions=transcriptions,
+# Evaluate all models in transcription CSV
+results = evaluator.evaluate_all_models_with_loader(
+    data_loader=loader,
+    ground_truth_path="./ground_truth.docx",
+    transcriptions_path="./transcriptions.csv",
     detailed=True
 )
 
-# 5. View results
-for model_name, result in results.items():
-    print(f"{model_name}: WER={result.wer:.2%}")
+# View results per model
+for model_name, model_results in results.items():
+    agg = evaluator.aggregate_metrics(model_results)
+    print(f"{model_name}: WER={agg['average_wer']:.2%}")
+```
+
+### Legacy API (Still Supported)
+
+```python
+from ASR.evaluation import ASREvaluator, load_ground_truth, load_transcriptions_by_timestamp
+from ASR.normalization import ATCTextNormalizer
+
+# Manual loading and normalization
+gt_raw = load_ground_truth("./ground_truth.docx")
+trans_raw = load_transcriptions_by_timestamp("./transcriptions.csv")
+
+normalizer = ATCTextNormalizer()
+gt_norm = {ts: normalizer.normalize(txt) for ts, txt in gt_raw.items()}
+trans_norm = {m: {ts: normalizer.normalize(txt) for ts, txt in d.items()} 
+              for m, d in trans_raw.items()}
+
+evaluator = ASREvaluator(use_jiwer=True)
+results = evaluator.evaluate_all_models(gt_norm, trans_norm, detailed=True)
 ```
 
 ### Available Metrics
@@ -364,15 +409,19 @@ result = ASREvaluationResult(
 ### Reports and Comparison
 
 ```python
-from ASR.evaluation import print_evaluation_report, compare_models
+from ASR.evaluation import ASREvaluator
 
-# Print formatted report
-print_evaluation_report(results)
+evaluator = ASREvaluator()
 
-# Compare models
-comparison = compare_models(results)
-# Returns model ranking by WER
+# Print formatted report with normalized text samples
+evaluator.print_evaluation_report(results, show_samples=True)
+
+# Compare models - returns sorted list by WER (lower is better)
+comparison = evaluator.compare_models(results)
+# [("whisper-large-v3", 0.12), ("whisper-base", 0.18), ...]
 ```
+
+The `ASREvaluator` automatically applies `ATCTextNormalizer` when `use_atc_normalizer=True` (default), ensuring consistent preprocessing for both reference and hypothesis text before WER calculation.
 
 ---
 

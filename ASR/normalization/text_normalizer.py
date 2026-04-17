@@ -62,6 +62,9 @@ class ATCTextNormalizer:
         self._heading_pattern = re.compile(r'\b(HDG|HEADING)\s*(\d{3})\b', re.IGNORECASE)
         self._altitude_pattern = re.compile(r'\b(ALT|ALTITUDE)\s*(\d{2,5})\b', re.IGNORECASE)
         
+        # Patrón para runway numbers (16R, 16L, 30R, etc.)
+        self._runway_pattern = re.compile(r'\b(runway\s+)?(\d{1,2})(L|R)\b', re.IGNORECASE)
+        
         # Patrones de callsign más específicos
         self._callsign_icao_pattern = re.compile(r'\b([A-Z]{3})(\d{1,4})\b')
         self._callsign_iata_pattern = re.compile(r'\b([A-Z]{2})(\d{1,4})\b')
@@ -259,6 +262,24 @@ class ATCTextNormalizer:
         
         text = self._squawk_pattern.sub(expand_squawk, text)
         
+        # Runway numbers: 16R → one six right, 16L → one six left
+        def expand_runway(match):
+            runway_prefix = match.group(1) if match.group(1) else ""
+            number = match.group(2)
+            direction = match.group(3).upper()
+            
+            # Expandir número
+            expanded_number = self._expand_number_string(number)
+            # Mapear L/R a left/right
+            direction_word = "left" if direction == "L" else "right"
+            
+            if runway_prefix:
+                return f"runway {expanded_number} {direction_word}"
+            else:
+                return f"{expanded_number} {direction_word}"
+        
+        text = self._runway_pattern.sub(expand_runway, text)
+        
         # Otras abreviaturas comunes
         replacements = {
             r'\btfc\b': 'traffic',
@@ -297,26 +318,14 @@ class ATCTextNormalizer:
     def _expand_numbers_in_text(self, text: str) -> str:
         """
         Expande números restantes en el texto.
-        Evita expandir números que ya fueron procesados (como parte de callsigns).
+        Expande TODOS los números sin límite de dígitos.
         """
-        # Buscar secuencias de dígitos que no estén ya expandidas
-        # y que parezcan números de vuelo o altitudes
-        
         def expand_number_match(match):
             number = match.group(0)
-            # No expandir si ya está rodeado de palabras de números
-            context_start = max(0, match.start() - 20)
-            context = text[context_start:match.start()]
-            
-            # Si el contexto contiene palabras de números recientes, podría ser duplicado
-            number_words = set(number_to_word.values())
-            context_words = set(context.split())
-            
-            # Expandir de todos modos para ser consistentes
             return self._expand_number_string(number)
         
-        # Expandir números de 1-4 dígitos que no son parte de algo ya expandido
-        pattern = r'\b\d{1,4}\b'
+        # Expandir TODOS los números sin límite de dígitos
+        pattern = r'\b\d+\b'
         text = re.sub(pattern, expand_number_match, text)
         
         return text

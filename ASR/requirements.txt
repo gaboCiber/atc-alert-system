@@ -23,6 +23,9 @@ jiwer>=3.0.0
 # Lectura de documentos DOCX (ground truth)
 python-docx>=0.8.11
 
+# Manipulación de CSV
+pandas>=2.0.0
+
 # === Normalización ===
 # (usa solo librerías estándar de Python)
 
