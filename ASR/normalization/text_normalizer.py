@@ -23,12 +23,14 @@ class ATCTextNormalizer:
     Normalizador de textos aeronáuticos para comparación ASR.
     
     Pipeline de normalización:
-    1. Minúsculas
-    2. Expansión de callsigns (JBU1676 → jetblue one six seven six)
-    3. Expansión de números (FL340 → flight level three four zero)
-    4. Expansión opcional de ICAO (BEMOL → bravo echo mike oscar lima)
-    5. Normalización de terminología ATC
-    6. Limpieza de puntuación
+    1. Separar términos concatenados (ILS16R → ils 16R)
+    2. Minúsculas
+    3. Expansión de callsigns (JBU1676 → jetblue one six seven six)
+    4. Expansión de números (FL340 → flight level three four zero)
+    5. Conversión de números compuestos (eight thirty five → eight three five)
+    6. Expansión opcional de ICAO (BEMOL → bravo echo mike oscar lima)
+    7. Normalización de terminología ATC
+    8. Limpieza de puntuación
     
     Args:
         expand_callsigns: Si expandir callsigns de aeronaves
@@ -37,6 +39,8 @@ class ATCTextNormalizer:
         normalize_terminology: Si reemplazar abreviaturas ATC
         remove_punctuation: Si eliminar signos de puntuación
         lowercase: Si convertir a minúsculas
+        convert_compound_numbers: Si convertir números compuestos (>10) a dígitos individuales
+        split_concatenated_terms: Si separar términos ATC concatenados con números
     """
     
     def __init__(
@@ -47,6 +51,8 @@ class ATCTextNormalizer:
         normalize_terminology: bool = True,
         remove_punctuation: bool = True,
         lowercase: bool = True,
+        convert_compound_numbers: bool = True,
+        split_concatenated_terms: bool = True,
     ):
         self.expand_callsigns = expand_callsigns
         self.expand_numbers = expand_numbers
@@ -54,6 +60,15 @@ class ATCTextNormalizer:
         self.normalize_terminology = normalize_terminology
         self.remove_punctuation = remove_punctuation
         self.lowercase = lowercase
+        self.convert_compound_numbers = convert_compound_numbers
+        self.split_concatenated_terms = split_concatenated_terms
+        
+        # Reverse mapping for compound number conversion
+        self._word_to_digit = {
+            'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
+            'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
+            'niner': '9'  # Aviation pronunciation
+        }
         
         # Compilar regex para eficiencia
         self._flight_level_pattern = re.compile(r'\b(FL|FLIGHT LEVEL)\s*(\d{2,3})\b', re.IGNORECASE)
@@ -64,6 +79,12 @@ class ATCTextNormalizer:
         
         # Patrón para runway numbers (16R, 16L, 30R, etc.)
         self._runway_pattern = re.compile(r'\b(runway\s+)?(\d{1,2})(L|R)\b', re.IGNORECASE)
+        
+        # Patrón para términos ATC concatenados con números (ILS16R, VOR15, etc.)
+        self._concatenated_terms_pattern = re.compile(
+            r'\b(ILS|VOR|NDB|DME|GS|LOC|VORDME|VORTAC)(\d{1,3})(L|R|C)?\b',
+            re.IGNORECASE
+        )
         
         # Patrones de callsign más específicos
         self._callsign_icao_pattern = re.compile(r'\b([A-Z]{3})(\d{1,4})\b')
@@ -85,8 +106,11 @@ class ATCTextNormalizer:
         if not text or not isinstance(text, str):
             return ""
         
-               
-        # 2. Expansión de callsigns (PRIMERO, antes de expandir números)
+        # 1. Separar términos ATC concatenados (ILS16R → ils 16R)
+        if self.split_concatenated_terms:
+            text = self._split_concatenated_terms(text)
+        
+        # 2. Expansión de callsigns (antes de expandir números)
         if self.expand_callsigns:
             text = self._expand_callsigns_in_text(text)
         
@@ -98,18 +122,22 @@ class ATCTextNormalizer:
         if self.expand_numbers:
             text = self._expand_numbers_in_text(text)
         
-        # 5. Expansión de ICAO (waypoints, etc.)
+        # 5. Conversión de números compuestos a dígitos individuales
+        if self.convert_compound_numbers:
+            text = self._convert_compound_numbers(text)
+        
+        # 6. Expansión de ICAO (waypoints, etc.)
         if self.expand_icao:
             text = self._expand_icao_waypoints(text)
         
-        # # 6. Limpieza de puntuación
+        # 7. Limpieza de puntuación
         if self.remove_punctuation:
             text = self._remove_punctuation(text)
         
-        # 7. Normalización final de espacios
+        # 8. Normalización final de espacios
         text = self._normalize_whitespace(text)
 
-        # 1. Minúsculas primero para procesamiento consistente
+        # 9. Minúsculas al final
         if self.lowercase:
             text = text.lower()
         
@@ -308,6 +336,7 @@ class ATCTextNormalizer:
             r'\bnotam\b': 'notam',
             r'\bmetar\b': 'metar',
             r'\btaf\b': 'taf',
+            r'\bniner\b': 'nine',  # Aviation pronunciation
         }
         
         for pattern, replacement in replacements.items():
@@ -368,6 +397,94 @@ class ATCTextNormalizer:
     def _normalize_whitespace(self, text: str) -> str:
         """Normaliza espacios múltiples."""
         return ' '.join(text.split())
+    
+    def _split_concatenated_terms(self, text: str) -> str:
+        """
+        Separa términos ATC concatenados con números.
+        
+        Ejemplos:
+        - ILS16R → ils 16R
+        - VOR15 → vor 15
+        - DME340 → dme 340
+        """
+        def split_term(match):
+            term = match.group(1).lower()
+            numbers = match.group(2)
+            direction = match.group(3) if match.group(3) else ""
+            
+            if direction:
+                return f"{term} {numbers}{direction}"
+            else:
+                return f"{term} {numbers}"
+        
+        return self._concatenated_terms_pattern.sub(split_term, text)
+    
+    def _convert_compound_numbers(self, text: str) -> str:
+        """
+        Convierte números compuestos en inglés (>10) a dígitos individuales.
+        
+        Ejemplos:
+        - "eight thirty five" → "eight three five"
+        - "twenty one" → "two one"
+        - "one hundred twenty three" → "one two three"
+        
+        También maneja números en formato de dígitos:
+        - "eight 35" → "eight three five"
+        """
+        # Patrones de números compuestos comunes en aviación
+        # Mantener las palabras de dígitos (one, two, etc.) no los dígitos numéricos
+        compound_patterns = [
+            # teens: ten one → one one (11), ten two → one two (12), etc.
+            (r'\bten\s+(one|two|three|four|five|six|seven|eight|nine)\b', 
+             lambda m: f"one {m.group(1)}"),
+            # twenty X → two X
+            (r'\btwenty\s+(one|two|three|four|five|six|seven|eight|nine)\b',
+             lambda m: f"two {m.group(1)}"),
+            # thirty X → three X
+            (r'\bthirty\s+(one|two|three|four|five|six|seven|eight|nine)\b',
+             lambda m: f"three {m.group(1)}"),
+            # forty X → four X
+            (r'\bforty\s+(one|two|three|four|five|six|seven|eight|nine)\b',
+             lambda m: f"four {m.group(1)}"),
+            # fifty X → five X
+            (r'\bfifty\s+(one|two|three|four|five|six|seven|eight|nine)\b',
+             lambda m: f"five {m.group(1)}"),
+            # sixty X → six X
+            (r'\bsixty\s+(one|two|three|four|five|six|seven|eight|nine)\b',
+             lambda m: f"six {m.group(1)}"),
+            # seventy X → seven X
+            (r'\bseventy\s+(one|two|three|four|five|six|seven|eight|nine)\b',
+             lambda m: f"seven {m.group(1)}"),
+            # eighty X → eight X
+            (r'\beighty\s+(one|two|three|four|five|six|seven|eight|nine)\b',
+             lambda m: f"eight {m.group(1)}"),
+            # ninety X → nine X
+            (r'\bninety\s+(one|two|three|four|five|six|seven|eight|nine)\b',
+             lambda m: f"nine {m.group(1)}"),
+            # Números de decenas solos: thirty → three zero, twenty → two zero, etc.
+            (r'\b(ten|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\b',
+             lambda m: self._tens_word_to_digits(m.group(1))),
+        ]
+        
+        for pattern, replacement in compound_patterns:
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+        
+        return text
+    
+    def _tens_word_to_digits(self, word: str) -> str:
+        """Convierte palabras de decenas a dígitos."""
+        tens_map = {
+            'ten': 'one zero',
+            'twenty': 'two zero',
+            'thirty': 'three zero',
+            'forty': 'four zero',
+            'fifty': 'five zero',
+            'sixty': 'six zero',
+            'seventy': 'seven zero',
+            'eighty': 'eight zero',
+            'ninety': 'nine zero',
+        }
+        return tens_map.get(word.lower(), word)
     
     def normalize_batch(self, texts: List[str]) -> List[str]:
         """
