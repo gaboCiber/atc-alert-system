@@ -42,6 +42,9 @@ Ejemplos:
   
   # Con checkpoint para resumir interrupciones
   python -m ASR.transcription.cli --model whisper --model-size large-v3 --input ./audio --output resultados.json --checkpoint
+  
+  # Con reducción de ruido (requiere entorno Python 3.9 con DeepFilterNet)
+  python -m ASR.transcription.cli --model whisperatc --input ./audio --output resultados.csv --noise-reduction --deepfilter-venv ./.venv-deepfilter
         """
     )
     
@@ -153,6 +156,26 @@ Ejemplos:
         help="Extensiones de audio a buscar (default: .mp3,.wav,.flac,.m4a,.ogg,.mkv)"
     )
     
+    # Opciones de reducción de ruido (DeepFilterNet)
+    parser.add_argument(
+        "--noise-reduction",
+        action="store_true",
+        help="Aplicar reducción de ruido con DeepFilterNet antes de transcribir"
+    )
+    
+    parser.add_argument(
+        "--deepfilter-venv",
+        default=None,
+        help="Ruta al entorno virtual Python 3.9 con DeepFilterNet (requerido si --noise-reduction)"
+    )
+    
+    parser.add_argument(
+        "--noise-reduction-device",
+        choices=["cpu", "cuda"],
+        default=None,
+        help="Dispositivo para DeepFilterNet (default: auto-detectar)"
+    )
+    
     return parser
 
 
@@ -229,19 +252,35 @@ def main():
     # Parsear extensiones
     extensions = tuple(args.extensions.split(","))
     
+    # Validar noise reduction
+    if args.noise_reduction and not args.deepfilter_venv:
+        print("Error: --deepfilter-venv es requerido cuando se usa --noise-reduction")
+        print("Ejemplo: --deepfilter-venv ./.venv-deepfilter")
+        return 1
+    
     # Crear modelo
     print(f"Creando modelo: {args.model}")
     model = create_model(args)
     
     try:
+        # Preparar kwargs para el pipeline
+        pipeline_kwargs = {
+            "model": model,
+            "output_format": output_format,
+            "show_progress": not args.no_progress,
+            "append_mode": args.append,
+            "checkpoint_path": checkpoint_path
+        }
+        
+        # Añadir noise reduction si está habilitado
+        if args.noise_reduction:
+            print(f"✅ Noise reduction habilitado (venv: {args.deepfilter_venv})")
+            pipeline_kwargs["noise_reduction"] = True
+            pipeline_kwargs["deepfilter_venv"] = args.deepfilter_venv
+            pipeline_kwargs["noise_reduction_device"] = args.noise_reduction_device
+        
         # Crear pipeline
-        pipeline = TranscriptionPipeline(
-            model=model,
-            output_format=output_format,
-            show_progress=not args.no_progress,
-            append_mode=args.append,
-            checkpoint_path=checkpoint_path
-        )
+        pipeline = TranscriptionPipeline(**pipeline_kwargs)
         
         # Ejecutar
         input_path = Path(args.input)

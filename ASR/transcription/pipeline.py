@@ -10,6 +10,13 @@ import os
 from .base import BaseASRModel, TranscriptionResult
 from .output import OutputManager
 
+# Import noise reduction if available
+try:
+    from ..noise_reduction import DeepFilterNetWrapper, TempAudioManager, NoiseReductionError
+    NOISE_REDUCTION_AVAILABLE = True
+except ImportError:
+    NOISE_REDUCTION_AVAILABLE = False
+
 
 class TranscriptionPipeline:
     """
@@ -26,7 +33,10 @@ class TranscriptionPipeline:
         show_progress: bool = True,
         append_mode: bool = False,
         checkpoint_path: Optional[Path] = None,
-        prompt_provider: Optional[Callable[[str], Optional[str]]] = None
+        prompt_provider: Optional[Callable[[str], Optional[str]]] = None,
+        noise_reduction: bool = False,
+        deepfilter_venv: Optional[Union[str, Path]] = None,
+        noise_reduction_device: Optional[str] = None
     ):
         """
         Inicializa el pipeline.
@@ -39,6 +49,9 @@ class TranscriptionPipeline:
             checkpoint_path: Ruta al archivo de checkpoint para resumir transcripciones
             prompt_provider: Callback opcional que recibe audio_path y retorna prompt
                             (o None para usar el prompt por defecto del modelo)
+            noise_reduction: Si es True, aplica DeepFilterNet antes de transcribir
+            deepfilter_venv: Ruta al entorno virtual Python 3.9 con DeepFilterNet
+            noise_reduction_device: Dispositivo para DeepFilterNet ("cpu", "cuda", o None)
         """
         self.model = model
         self.output_manager = OutputManager(format=output_format)
@@ -47,6 +60,30 @@ class TranscriptionPipeline:
         self.checkpoint_path = Path(checkpoint_path) if checkpoint_path else None
         self.prompt_provider = prompt_provider
         self._checkpoint_dict: Dict[str, TranscriptionResult] = {}
+        
+        # Inicializar noise reduction si está habilitado
+        self._noise_reduction = noise_reduction
+        self._deepfilter_wrapper = None
+        self._temp_manager = None
+        
+        if noise_reduction:
+            if not NOISE_REDUCTION_AVAILABLE:
+                raise ImportError(
+                    "El módulo de noise reduction no está disponible. "
+                    "Asegúrate de que ASR.noise_reduction esté instalado correctamente."
+                )
+            
+            if not deepfilter_venv:
+                raise ValueError(
+                    "Debes especificar 'deepfilter_venv' para usar noise_reduction. "
+                    "Ejemplo: deepfilter_venv='./.venv-deepfilter'"
+                )
+            
+            self._deepfilter_wrapper = DeepFilterNetWrapper(
+                venv_path=deepfilter_venv,
+                device=noise_reduction_device
+            )
+            self._temp_manager = TempAudioManager(prefix="asr_noise_reduction_")
         
         # Cargar checkpoint si existe
         if self.checkpoint_path:
@@ -61,6 +98,40 @@ class TranscriptionPipeline:
                 for result in checkpoint_results:
                     self._checkpoint_dict[result.file_path] = result
                 print(f"Checkpoint cargado: {len(self._checkpoint_dict)} transcripciones")
+    
+    def _apply_noise_reduction(self, audio_path: Union[str, Path]) -> Path:
+        """
+        Aplica reducción de ruido al audio si está habilitada.
+        
+        Args:
+            audio_path: Ruta al archivo de audio original
+        
+        Returns:
+            Ruta al archivo limpio (o original si falló)
+        """
+        if not self._noise_reduction or not self._deepfilter_wrapper:
+            return Path(audio_path)
+        
+        try:
+            # Crear archivo temporal para el audio limpio
+            temp_output = self._temp_manager.create_temp(
+                suffix="_cleaned.wav",
+                dir=Path(audio_path).parent
+            )
+            
+            # Aplicar DeepFilterNet
+            cleaned_path = self._deepfilter_wrapper.clean_audio(
+                input_path=audio_path,
+                output_path=temp_output
+            )
+            
+            return cleaned_path
+            
+        except Exception as e:
+            # Si falla, usar el audio original y mostrar warning
+            if self.show_progress:
+                print(f"⚠️  Noise reduction falló para {audio_path}: {e}")
+            return Path(audio_path)
     
     def _filter_files_with_checkpoint(
         self,
@@ -161,13 +232,21 @@ class TranscriptionPipeline:
             iterator = files_to_process
         
         for audio_path in iterator:
+            cleaned_audio_path = None
             try:
+                # Aplicar noise reduction si está habilitado
+                if self._noise_reduction:
+                    cleaned_audio_path = self._apply_noise_reduction(audio_path)
+                    audio_to_transcribe = cleaned_audio_path
+                else:
+                    audio_to_transcribe = audio_path
+                
                 # Obtener prompt dinámico si hay un provider configurado
                 prompt = None
                 if self.prompt_provider:
                     prompt = self.prompt_provider(audio_path)
                 
-                result = self.model.transcribe(audio_path, prompt=prompt)
+                result = self.model.transcribe(audio_to_transcribe, prompt=prompt)
                 results.append(result)
                 # Guardar checkpoint incrementalmente
                 self._save_checkpoint_incremental(result)

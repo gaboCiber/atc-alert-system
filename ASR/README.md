@@ -45,6 +45,9 @@ ASR/
 │   └── config/        # Prompts and configuration
 ├── normalization/     # Text normalization for evaluation
 ├── evaluation/        # WER evaluation and ASR metrics
+├── noise_reduction/   # Audio noise reduction (DeepFilterNet)
+│   ├── scripts/       # Setup scripts for Python 3.9 venv
+│   └── ...
 ├── requirements.txt   # Module dependencies
 └── README.md          # This file
 ```
@@ -273,6 +276,9 @@ python -m ASR.transcription.cli \
 | `--checkpoint` | flag | Enable checkpoint for resuming interrupted transcriptions |
 | `--no-progress` | flag | Hide progress bar |
 | `--extensions` | string | Extensions (default: .mp3,.wav,.flac,.m4a,.ogg,.mkv) |
+| `--noise-reduction` | flag | Apply DeepFilterNet noise reduction before transcription |
+| `--deepfilter-venv` | path | Path to Python 3.9 venv with DeepFilterNet (required with --noise-reduction) |
+| `--noise-reduction-device` | cpu, cuda | Device for DeepFilterNet (default: auto) |
 
 ### Output Format
 
@@ -502,6 +508,107 @@ python ASR/run_evaluation.py \
 | `--normalize` | Apply normalization before evaluation |
 | `--no-normalize` | Do not normalize (raw text) |
 | `--show-samples` | Number of normalization samples to show |
+
+---
+
+## 4. Noise Reduction (`ASR.noise_reduction`)
+
+Reducción de ruido para audio ATC usando **DeepFilterNet**, aplicada automáticamente antes de la transcripción.
+
+### ⚠️ Requisitos Importantes
+
+DeepFilterNet **requiere Python 3.9** debido a dependencias de paquetes. El proyecto principal puede usar Python 3.11+, pero DeepFilterNet debe ejecutarse en un entorno virtual separado con Python 3.9.
+
+### Setup del Entorno Virtual
+
+Usa el script de setup proporcionado:
+
+```bash
+# Linux/Mac
+cd ASR/noise_reduction/scripts
+chmod +x setup_venv.sh
+./setup_venv.sh
+
+# Windows (PowerShell)
+cd ASR\noise_reduction\scripts
+.\setup_venv.bat
+```
+
+O manualmente con `uv`:
+
+```bash
+# Crear venv con Python 3.9
+uv venv .venv-deepfilter --python 3.9
+
+# Instalar dependencias
+uv pip install --python .venv-deepfilter/bin/python torch torchaudio -f https://download.pytorch.org/whl/cpu/torch_stable.html
+uv pip install --python .venv-deepfilter/bin/python maturin
+uv pip install --python .venv-deepfilter/bin/python deepfilterlib==0.5.6 --no-build-isolation
+uv pip install --python .venv-deepfilter/bin/python deepfilternet --no-build-isolation
+```
+
+### Uso en Python
+
+```python
+from ASR.transcription import WhisperATCModel, TranscriptionPipeline
+
+model = WhisperATCModel(model_version="v3")
+
+# Pipeline con noise reduction
+pipeline = TranscriptionPipeline(
+    model=model,
+    output_format="csv",
+    noise_reduction=True,
+    deepfilter_venv="./.venv-deepfilter",  # Ruta al venv de Python 3.9
+    noise_reduction_device=None  # auto-detectar (cpu/cuda)
+)
+
+pipeline.run_directory("./audio", "./output/results.csv")
+```
+
+### Uso con CLI
+
+```bash
+python -m ASR.transcription.cli \
+    --model whisperatc \
+    --input ./audio \
+    --output results.csv \
+    --noise-reduction \
+    --deepfilter-venv ./.venv-deepfilter
+
+# Especificar dispositivo (opcional)
+python -m ASR.transcription.cli \
+    --model whisperatc \
+    --input ./audio \
+    --output results.csv \
+    --noise-reduction \
+    --deepfilter-venv ./.venv-deepfilter \
+    --noise-reduction-device cuda
+```
+
+### API Directa (sin pipeline)
+
+```python
+from ASR.noise_reduction import DeepFilterNetWrapper
+
+wrapper = DeepFilterNetWrapper(
+    venv_path="./.venv-deepfilter",
+    device="cuda"  # o "cpu", o None para auto
+)
+
+# Verificar disponibilidad
+if wrapper.is_available():
+    # Limpiar audio
+    cleaned_path = wrapper.clean_audio("input.wav", "output_cleaned.wav")
+    print(f"Audio limpio guardado en: {cleaned_path}")
+```
+
+### Cómo Funciona
+
+1. **On-the-fly**: El pipeline crea archivos temporales para el audio limpio
+2. **Subprocess**: DeepFilterNet se ejecuta en el venv Python 3.9 vía subprocess
+3. **Fallback**: Si la limpieza falla, se usa el audio original con un warning
+4. **Limpieza**: Los archivos temporales se eliminan automáticamente
 
 ---
 
