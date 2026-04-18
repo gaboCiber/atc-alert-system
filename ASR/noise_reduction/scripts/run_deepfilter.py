@@ -66,23 +66,26 @@ def main():
         # DeepFilterNet trabaja internamente a 48kHz, load_audio se encarga del resampling
         audio, _ = load_audio(args.input, sr=df_state.sr())
         
-        # Mover a GPU si está disponible y se solicitó
+        # DeepFilterNet requiere audio en CPU (no soporta tensores CUDA directamente)
+        # El modelo puede estar en GPU pero el audio debe estar en CPU
+        device = torch.device("cpu")
+        audio = audio.to(device)
+        
+        # El modelo puede usar GPU si está disponible y se solicitó
         if args.device == "cuda" and torch.cuda.is_available():
-            device = torch.device("cuda")
-            model = model.to(device)
-            audio = audio.to(device)
-            print("Procesando audio en CUDA...")
+            model = model.to("cuda")
+            print("Procesando audio en CPU, modelo en CUDA...")
         elif args.device == "cpu":
-            device = torch.device("cpu")
-            model = model.to(device)
-            audio = audio.to(device)
+            model = model.to("cpu")
             print("Procesando audio en CPU...")
         else:
-            # Auto-detectar
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            model = model.to(device)
-            audio = audio.to(device)
-            print(f"Procesando audio en {device}...")
+            # Auto-detectar: usar GPU para modelo si está disponible
+            if torch.cuda.is_available():
+                model = model.to("cuda")
+                print("Procesando audio en CPU, modelo en CUDA (auto)...")
+            else:
+                model = model.to("cpu")
+                print("Procesando audio en CPU...")
         
         # Ejecutar la mejora (Denoising)
         enhanced_audio = enhance(model, df_state, audio)
