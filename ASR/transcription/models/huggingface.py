@@ -95,12 +95,18 @@ class HuggingFaceModel(BaseASRModel):
             except ImportError:
                 pass
     
-    def transcribe(self, audio_path: Union[str, Path]) -> TranscriptionResult:
+    def transcribe(
+        self,
+        audio_path: Union[str, Path],
+        prompt: Optional[str] = None
+    ) -> TranscriptionResult:
         """
         Transcribe un archivo de audio.
         
         Args:
             audio_path: Ruta al archivo de audio
+            prompt: Prompt opcional (para compatibilidad de API, HuggingFace 
+                   generalmente no lo utiliza como Whisper)
             
         Returns:
             TranscriptionResult con el texto y metadata

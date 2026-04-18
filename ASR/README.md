@@ -150,6 +150,62 @@ prompt = create_custom_prompt(
 )
 ```
 
+### Dynamic Prompts (Per-File Context)
+
+The `transcribe()` method and `TranscriptionPipeline` support dynamic prompts that can be different for each audio file. This is useful for providing context-specific information like nearby waypoints and callsigns.
+
+```python
+from ASR.transcription import WhisperModel, TranscriptionPipeline, create_custom_prompt
+from ASR.evaluation.data_loaders import Atco2DataLoader
+from pathlib import Path
+
+# Create model once
+model = WhisperModel(model_name="large-v3", device="auto")
+
+# Define dynamic prompt provider
+loader = Atco2DataLoader()
+
+def dynamic_prompt_provider(audio_path: str) -> str:
+    """Generate context-specific prompt for each audio file"""
+    info_path = str(Path(audio_path).with_suffix(".info"))
+    
+    try:
+        waypoints = loader.extract_waypoints_from_info(info_path)
+        callsigns = loader.extract_callsigns_from_info(info_path)
+    except FileNotFoundError:
+        return create_custom_prompt(extra_terms="")
+    
+    # Build context string
+    parts = []
+    if waypoints:
+        parts.append(f"Nearby waypoints: {', '.join(waypoints)}")
+    if callsigns:
+        cs_str = ", ".join([f"{code} ({phonetic})" for code, phonetic in callsigns.items()])
+        parts.append(f"Common callsigns: {cs_str}")
+    
+    return create_custom_prompt(extra_terms=". ".join(parts))
+
+# Create pipeline with dynamic prompt provider
+pipeline = TranscriptionPipeline(
+    model=model,
+    output_format="csv",
+    show_progress=True,
+    prompt_provider=dynamic_prompt_provider  # Callback for each file
+)
+
+# Process directory - each file gets its own prompt based on its .info file
+results = pipeline.run_directory(
+    directory="./ASR/Recordings/ATCO2-ASRdataset-v1_beta/DATA",
+    output_path="./results.csv",
+    extensions=(".wav",)
+)
+```
+
+**Key Features:**
+- `transcribe(audio_path, prompt=...)`: Override the model's default prompt for a single transcription
+- `prompt_provider`: Callback function that receives the audio path and returns a custom prompt
+- The model is loaded only once, but each file can have a different prompt
+
 ### CLI (Command Line Interface)
 
 ```bash

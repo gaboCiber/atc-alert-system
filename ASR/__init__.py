@@ -11,6 +11,8 @@ from .evaluation import (
     Atco2DataLoader,
 )
 
+from .transcription import WhisperModel, FasterWhisperModel, WhisperATCModel, HuggingFaceModel, TranscriptionPipeline, TranscriptionResult
+
 __all__ = [
     'ATCTextNormalizer',
     'quick_normalize',
@@ -19,4 +21,10 @@ __all__ = [
     'BaseDataLoader',
     'EcnaDataLoader',
     'Atco2DataLoader',
+    'WhisperModel',
+    'FasterWhisperModel',
+    'WhisperATCModel',
+    'HuggingFaceModel',
+    'TranscriptionPipeline',
+    'TranscriptionResult',
 ]

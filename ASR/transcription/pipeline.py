@@ -4,7 +4,7 @@ Orquesta la transcripción de múltiples archivos con un modelo.
 """
 
 from pathlib import Path
-from typing import List, Union, Optional, Dict
+from typing import List, Union, Optional, Dict, Callable
 import os
 
 from .base import BaseASRModel, TranscriptionResult
@@ -25,7 +25,8 @@ class TranscriptionPipeline:
         output_format: str = "csv",
         show_progress: bool = True,
         append_mode: bool = False,
-        checkpoint_path: Optional[Path] = None
+        checkpoint_path: Optional[Path] = None,
+        prompt_provider: Optional[Callable[[str], Optional[str]]] = None
     ):
         """
         Inicializa el pipeline.
@@ -36,12 +37,15 @@ class TranscriptionPipeline:
             show_progress: Mostrar barra de progreso durante transcripción
             append_mode: Si es True, agrega resultados a archivo existente (solo CSV)
             checkpoint_path: Ruta al archivo de checkpoint para resumir transcripciones
+            prompt_provider: Callback opcional que recibe audio_path y retorna prompt
+                            (o None para usar el prompt por defecto del modelo)
         """
         self.model = model
         self.output_manager = OutputManager(format=output_format)
         self.show_progress = show_progress
         self.append_mode = append_mode
         self.checkpoint_path = Path(checkpoint_path) if checkpoint_path else None
+        self.prompt_provider = prompt_provider
         self._checkpoint_dict: Dict[str, TranscriptionResult] = {}
         
         # Cargar checkpoint si existe
@@ -158,7 +162,12 @@ class TranscriptionPipeline:
         
         for audio_path in iterator:
             try:
-                result = self.model.transcribe(audio_path)
+                # Obtener prompt dinámico si hay un provider configurado
+                prompt = None
+                if self.prompt_provider:
+                    prompt = self.prompt_provider(audio_path)
+                
+                result = self.model.transcribe(audio_path, prompt=prompt)
                 results.append(result)
                 # Guardar checkpoint incrementalmente
                 self._save_checkpoint_incremental(result)

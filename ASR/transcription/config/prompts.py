@@ -106,16 +106,26 @@ def create_custom_prompt(
         Prompt personalizado
     """
     parts = [ATC_TERMINOLOGY.strip()]
+    parts.append("\n")
     
     if include_nato:
+        parts.append("NATO ALPHABET: ")
         parts.append(NATO_ALPHABET.replace(chr(10), ' ').strip())
+        parts.append("\n")
     if include_terminology:
-        parts.append(ATC_TERMS.strip())
+        parts.append("ATC TERMINOLOGY: ")
+        parts.append(ATC_TERMS.replace("\n", " ").strip())
+        parts.append("\n")
     if include_airlines:
-        parts.append(AIRLINES.strip())
+        parts.append("AIRLINES: ")
+        parts.append(AIRLINES.replace("\n", " ").strip())
+        parts.append("\n")
     if include_cuba_terms:
-        parts.append(CUBA_TERMS.strip())
+        parts.append("CUBA TERMS: ")
+        parts.append(CUBA_TERMS.replace("\n", "").strip())
+        parts.append("\n")
     if extra_terms:
+        parts.append("EXTRA TERMS: ")
         parts.append(extra_terms)
     
     return " ".join(parts)

@@ -81,12 +81,18 @@ class FasterWhisperModel(BaseASRModel):
             except ImportError:
                 pass
     
-    def transcribe(self, audio_path: Union[str, Path]) -> TranscriptionResult:
+    def transcribe(
+        self,
+        audio_path: Union[str, Path],
+        prompt: Optional[str] = None
+    ) -> TranscriptionResult:
         """
         Transcribe un archivo de audio.
         
         Args:
             audio_path: Ruta al archivo de audio
+            prompt: Prompt opcional para esta transcripción específica.
+                   Si es None, usa el prompt por defecto del modelo (self.prompt).
             
         Returns:
             TranscriptionResult con el texto y metadata
@@ -101,9 +107,10 @@ class FasterWhisperModel(BaseASRModel):
             "beam_size": self.beam_size,
         }
         
-        # Agregar prompt inicial si está disponible
-        if self.prompt:
-            transcribe_kwargs["initial_prompt"] = self.prompt
+        # Usar el prompt proporcionado o el del modelo
+        effective_prompt = prompt if prompt is not None else self.prompt
+        if effective_prompt:
+            transcribe_kwargs["initial_prompt"] = effective_prompt
         
         # Agregar parámetros adicionales
         transcribe_kwargs.update(self.config)

@@ -249,3 +249,77 @@ class Atco2DataLoader(BaseDataLoader):
             return str(wav_path)
         
         return None
+    
+    def extract_waypoints_from_info(self, info_path: str) -> List[str]:
+        """
+        Extract waypoints list from an .info file.
+        
+        Args:
+            info_path: Path to .info file
+            
+        Returns:
+            List of waypoint names (e.g., ["AKEVA", "ARVEG", "BAGRU"])
+            
+        Raises:
+            FileNotFoundError: If info file doesn't exist
+        """
+        info_path = Path(info_path)
+        if not info_path.exists():
+            raise FileNotFoundError(f"Info file not found: {info_path}")
+        
+        with open(info_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.startswith('waypoints nearby:'):
+                    # Extract waypoints after the colon
+                    waypoints_str = line.split(':', 1)[1].strip()
+                    return waypoints_str.split() if waypoints_str else []
+        
+        return []
+    
+    def extract_callsigns_from_info(self, info_path: str) -> Dict[str, str]:
+        """
+        Extract callsigns and their phonetic pronunciations from an .info file.
+        
+        Args:
+            info_path: Path to .info file
+            
+        Returns:
+            Dictionary mapping callsign to phonetic text
+            (e.g., {"BLA131": "All Charter One Three One"})
+            
+        Raises:
+            FileNotFoundError: If info file doesn't exist
+        """
+        info_path = Path(info_path)
+        if not info_path.exists():
+            raise FileNotFoundError(f"Info file not found: {info_path}")
+        
+        callsigns = {}
+        in_callsigns_section = False
+        
+        with open(info_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.rstrip()
+                
+                # Check for section start
+                if line.startswith('callsigns nearby:'):
+                    in_callsigns_section = True
+                    continue
+                
+                # Check for section end (empty line or new section)
+                if in_callsigns_section:
+                    if not line or ':' in line.split()[0] if line else False:
+                        # Empty line or new section header
+                        if not line or (line and not line.startswith('callsigns nearby:') and ':' in line):
+                            break
+                    
+                    # Parse callsign line: "CALLSIGN : Phonetic text"
+                    if ' : ' in line:
+                        parts = line.split(' : ', 1)
+                        if len(parts) == 2:
+                            callsign = parts[0].strip()
+                            phonetic = parts[1].strip()
+                            if callsign:
+                                callsigns[callsign] = phonetic
+        
+        return callsigns

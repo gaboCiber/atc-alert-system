@@ -71,12 +71,18 @@ class BaseASRModel(ABC):
         pass
     
     @abstractmethod
-    def transcribe(self, audio_path: Union[str, Path]) -> TranscriptionResult:
+    def transcribe(
+        self,
+        audio_path: Union[str, Path],
+        prompt: Optional[str] = None
+    ) -> TranscriptionResult:
         """
         Transcribe un archivo de audio.
         
         Args:
             audio_path: Ruta al archivo de audio
+            prompt: Prompt opcional para esta transcripción específica.
+                   Si es None, usa el prompt por defecto del modelo (self.prompt).
             
         Returns:
             TranscriptionResult con el texto y metadata
@@ -86,7 +92,8 @@ class BaseASRModel(ABC):
     def transcribe_batch(
         self,
         audio_paths: List[Union[str, Path]],
-        show_progress: bool = True
+        show_progress: bool = True,
+        prompt: Optional[str] = None
     ) -> List[TranscriptionResult]:
         """
         Transcribe múltiples archivos de audio.
@@ -94,6 +101,8 @@ class BaseASRModel(ABC):
         Args:
             audio_paths: Lista de rutas a archivos de audio
             show_progress: Mostrar barra de progreso
+            prompt: Prompt opcional para todas las transcripciones.
+                   Si es None, usa el prompt por defecto del modelo.
             
         Returns:
             Lista de TranscriptionResult
@@ -115,7 +124,7 @@ class BaseASRModel(ABC):
         
         for audio_path in iterator:
             try:
-                result = self.transcribe(audio_path)
+                result = self.transcribe(audio_path, prompt=prompt)
                 results.append(result)
             except Exception as e:
                 # Crear resultado con error
