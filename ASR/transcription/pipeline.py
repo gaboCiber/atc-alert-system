@@ -600,8 +600,6 @@ class MultiModelPipeline:
                 
                 # Verificar si el checkpoint está completo (tiene todos los archivos)
                 checkpoint_complete = False
-                print(f"🔍 DEBUG: checkpoint_complete inicializado = {checkpoint_complete}")
-                print(f"🔍 DEBUG: {model_name} en checkpoint_dict? {model_name in self._checkpoint_dict}")
                 if model_name in self._checkpoint_dict:
                     checkpoint_results = self._checkpoint_dict[model_name]
                     checkpoint_files = {r.file_path for r in checkpoint_results if not r.metadata.get("error")}
@@ -619,7 +617,6 @@ class MultiModelPipeline:
                         missing_files = required_files - checkpoint_files
                         print(f"\n⏯️  Modelo '{model_name}' checkpoint incompleto ({len(checkpoint_files)}/{len(required_files)}), reanudando...")
             
-                print(f"🔍 DEBUG: Antes de if not checkpoint_complete: {checkpoint_complete}")
                 if not checkpoint_complete:
                     print(f"\n{'='*60}")
                     print(f"Ejecutando modelo: {model_name}")
@@ -654,6 +651,21 @@ class MultiModelPipeline:
                     # Opcional: Guardar checkpoint consolidado maestro
                     if self.checkpoint_path:
                         self._save_master_checkpoint()
+                    
+                    # Liberar memoria/GPU del modelo actual antes de cargar el siguiente
+                    print(f"🧹 Liberando memoria del modelo '{model_name}'...")
+                    del pipeline
+                    del model
+                    import gc
+                    gc.collect()
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            print(f"✅ GPU cache liberada")
+                    except ImportError:
+                        pass
+                    print(f"✅ Memoria liberada para '{model_name}'")
         
         finally:
             # Limpiar archivos temporales de audio (noise reduction)
