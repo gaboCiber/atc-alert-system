@@ -117,14 +117,15 @@ class DeepFilterNetWrapper:
         
         # Crear archivo temporal si no se especificó salida
         if output_path is None:
-            # Usar el mismo directorio que el input para evitar problemas de permisos
-            temp_fd, temp_path = tempfile.mkstemp(
-                suffix="_cleaned.wav",
-                dir=input_path.parent,
-                prefix=".tmp_"
-            )
-            os.close(temp_fd)
-            output_path = Path(temp_path)
+            # Usar el nombre base del archivo original para identificación
+            base_name = input_path.stem  # nombre sin extensión
+            # Usar directorio temporal del sistema (/tmp) para evitar mezclar con archivos originales
+            temp_dir = Path(tempfile.gettempdir())
+            # Nombre determinístico: /tmp/asr_nr_{basename}_cleaned.wav
+            output_path = temp_dir / f"asr_nr_{base_name}_cleaned.wav"
+            # Si existe, eliminarlo primero
+            if output_path.exists():
+                output_path.unlink()
         else:
             output_path = Path(output_path)
             # Asegurar que el directorio de salida existe

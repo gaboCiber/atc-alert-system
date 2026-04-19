@@ -40,7 +40,9 @@ class TempAudioManager:
     def create_temp(
         self,
         suffix: str = ".wav",
-        dir: Optional[Union[str, Path]] = None
+        dir: Optional[Union[str, Path]] = None,
+        basename: Optional[str] = None,
+        deterministic: bool = False
     ) -> Path:
         """
         Crea un archivo temporal y lo registra para limpieza.
@@ -48,6 +50,8 @@ class TempAudioManager:
         Args:
             suffix: Extensión del archivo (default: .wav)
             dir: Directorio donde crear el archivo (default: sistema temp)
+            basename: Nombre base del archivo original para preservar en el temporal
+            deterministic: Si es True, usa nombre determinístico (sin random suffix)
         
         Returns:
             Ruta al archivo temporal creado
@@ -57,25 +61,41 @@ class TempAudioManager:
             dir_path = Path(dir)
             dir_path.mkdir(parents=True, exist_ok=True)
         else:
-            dir_path = None
+            dir_path = Path(tempfile.gettempdir())
         
-        # Crear archivo temporal
-        fd, temp_path = tempfile.mkstemp(
-            suffix=suffix,
-            prefix=self.prefix,
-            dir=str(dir_path) if dir_path else None
-        )
-        os.close(fd)
+        # Construir prefijo: usar basename si se proporciona, sino el prefijo por defecto
+        if basename:
+            temp_prefix = f"{self.prefix}{basename}_"
+        else:
+            temp_prefix = self.prefix
         
-        path = Path(temp_path)
-        self._temp_files.append(path)
+        if deterministic:
+            # Nombre determinístico: /tmp/{prefix}{basename}_cleaned.wav
+            temp_filename = f"{temp_prefix}cleaned{suffix}"
+            temp_path = dir_path / temp_filename
+            # Si existe, eliminarlo primero
+            if temp_path.exists():
+                temp_path.unlink()
+            # Crear archivo vacío para reservar el nombre
+            temp_path.touch()
+        else:
+            # Crear archivo temporal con random suffix (comportamiento original)
+            fd, temp_path = tempfile.mkstemp(
+                suffix=suffix,
+                prefix=temp_prefix,
+                dir=str(dir_path) if dir_path else None
+            )
+            os.close(fd)
+            temp_path = Path(temp_path)
+        
+        self._temp_files.append(temp_path)
         
         # Registrar cleanup al exit si no está registrado
         if not self._registered_cleanup:
             atexit.register(self._cleanup_at_exit)
             self._registered_cleanup = True
         
-        return path
+        return temp_path
     
     def register_file(self, path: Union[str, Path]) -> Path:
         """
@@ -144,7 +164,7 @@ def quick_temp_copy(
     temp_manager: Optional[TempAudioManager] = None
 ) -> Path:
     """
-    Crea una copia temporal de un archivo de audio.
+    Crea una copia temporal de un archivo de audio preservando el nombre base.
     
     Args:
         source: Ruta al archivo original
@@ -158,11 +178,15 @@ def quick_temp_copy(
     
     source = Path(source)
     
+    # Extraer nombre base del archivo original (sin extensión)
+    basename = source.stem
+    
     if temp_manager:
-        temp_path = temp_manager.create_temp(suffix=suffix, dir=source.parent)
+        temp_path = temp_manager.create_temp(suffix=suffix, dir=source.parent, basename=basename)
     else:
         fd, temp_path = tempfile.mkstemp(
             suffix=suffix,
+            prefix=f"{basename}_",
             dir=source.parent
         )
         os.close(fd)

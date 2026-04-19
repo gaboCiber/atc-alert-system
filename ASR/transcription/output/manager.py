@@ -295,3 +295,69 @@ class OutputManager:
         """
         with open(input_path, 'r', encoding='utf-8') as f:
             return json.load(f)
+    
+    @staticmethod
+    def checkpoint_to_csv(
+        checkpoint_path: Union[str, Path],
+        csv_path: Union[str, Path],
+        model_column: str = "model",
+        append: bool = True
+    ) -> None:
+        """
+        Convierte un archivo checkpoint JSON a formato CSV de tabla.
+        
+        Lee un checkpoint (formato JSON con lista de resultados) y lo convierte
+        al formato de tabla CSV (una fila por modelo, columnas son archivos de audio).
+        
+        Args:
+            checkpoint_path: Ruta al archivo checkpoint JSON
+            csv_path: Ruta al archivo CSV de salida
+            model_column: Nombre de la columna para el modelo
+            append: Si True, añade al CSV existente; si False, sobrescribe
+        """
+        checkpoint_path = Path(checkpoint_path)
+        csv_path = Path(csv_path)
+        
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint no encontrado: {checkpoint_path}")
+        
+        # Cargar checkpoint
+        with open(checkpoint_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        results = data.get("results", [])
+        if not results:
+            print(f"⚠️  No hay resultados en {checkpoint_path}")
+            return
+        
+        # Convertir a TranscriptionResult
+        from ..base import TranscriptionResult
+        transcription_results = []
+        for entry in results:
+            result = TranscriptionResult(
+                text=entry.get("text", ""),
+                file_path=entry.get("file_path", ""),
+                model_name=entry.get("model_name", ""),
+                timestamps=entry.get("timestamps"),
+                confidence=entry.get("confidence"),
+                duration=entry.get("duration"),
+                metadata=entry.get("metadata", {})
+            )
+            transcription_results.append(result)
+        
+        # Usar OutputManager para guardar en formato CSV
+        manager = OutputManager(format="csv")
+        
+        if append and csv_path.exists():
+            manager.append(transcription_results, csv_path, model_column)
+            print(f"✅ Añadidos {len(transcription_results)} resultados a {csv_path}")
+        else:
+            manager.save(transcription_results, csv_path, model_column)
+            mode_str = "actualizado" if append else "creado"
+            print(f"✅ CSV {mode_str} con {len(transcription_results)} resultos: {csv_path}")
+        
+        # Mostrar resumen
+        models = set(r.model_name for r in transcription_results)
+        files = len(set(r.file_path for r in transcription_results))
+        print(f"   Modelos: {', '.join(sorted(models))}")
+        print(f"   Archivos: {files}")
