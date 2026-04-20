@@ -33,9 +33,18 @@ pandas>=2.0.0
 # Manipulación de paths y datos
 pathlib2>=2.3.7; python_version<"3.4"
 
+# === Data Loaders ===
+# HuggingFace datasets library
+datasets<=4.5.0
+
+# Para guardar archivos de audio .wav
+soundfile>=0.12.1
+
+# Para decodificación de audio en datasets (requerido por algunos datasets HF)
+torchcodec>=0.2.0
+
 # === Opcionales ===
 # Para soporte de audio adicional
-# soundfile>=0.12.1
 # librosa>=0.10.0
 
 # Para aceleración GPU (si CUDA disponible)

@@ -436,6 +436,7 @@ The evaluation module now uses an object-oriented approach with data loaders for
 |--------|-------------|----------|
 | `EcnaDataLoader` | Loader for ECNA dataset format | ECNA ground truth (DOCX + audio) |
 | `Atco2DataLoader` | Loader for ATCO2 dataset format | ATCO2 structured data |
+| `HuggingFaceDataLoader` | Loader for HuggingFace datasets | Download ATC datasets from HF Hub |
 | `BaseDataLoader` | Abstract base for custom loaders | Extend for new datasets |
 
 ### Basic Usage (New API with Loaders)
@@ -465,6 +466,46 @@ for model_name, model_results in results.items():
     agg = evaluator.aggregate_metrics(model_results)
     print(f"{model_name}: WER={agg['average_wer']:.2%}")
 ```
+
+### HuggingFace Data Loader
+
+Download and use HuggingFace datasets for ASR evaluation. The loader automatically downloads audio files and ground truth locally.
+
+```python
+from ASR.evaluation import HuggingFaceDataLoader, ASREvaluator
+from ASR.transcription import WhisperATCModel, TranscriptionPipeline
+
+# Create loader for HuggingFace dataset
+loader = HuggingFaceDataLoader(
+    dataset_name="jacktol/atc-dataset",  # or "jlvdoorn/atco2-asr"
+    audio_column="audio",                # Column containing audio data
+    text_column="text",                  # Column containing transcription
+    split="both"                         # "train", "test", or "both"
+)
+
+# Download and save locally (first time only)
+audio_dir, gt_csv = loader.download_and_save(cache_dir="./hf_cache")
+
+# Use with TranscriptionPipeline (same as other loaders)
+model = WhisperATCModel(model_version="v3")
+pipeline = TranscriptionPipeline(model, output_format="csv")
+pipeline.run_directory(audio_dir, "./hf_transcriptions.csv")
+
+# Evaluate
+evaluator = ASREvaluator(use_jiwer=True, use_atc_normalizer=True)
+results = evaluator.evaluate_all_models_with_loader(
+    data_loader=loader,
+    ground_truth_path=gt_csv,
+    transcriptions_path="./hf_transcriptions.csv",
+    detailed=True
+)
+```
+
+**Features:**
+- Downloads audio as individual .wav files (compatible with TranscriptionPipeline)
+- Generates CSV with ground truth including `audio_id`, `audio_path`, `transcription`, `split`
+- Handles both `torchcodec` and legacy audio formats automatically
+- Supports filtering by split (`load_ground_truth_by_split()`)
 
 ### Legacy API (Still Supported)
 
