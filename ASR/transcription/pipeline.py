@@ -6,6 +6,7 @@ Orquesta la transcripción de múltiples archivos con un modelo.
 from pathlib import Path
 from typing import List, Union, Optional, Dict, Callable
 import os
+import hashlib
 
 from .base import BaseASRModel, TranscriptionResult
 from .output import OutputManager
@@ -40,6 +41,7 @@ class TranscriptionPipeline:
         append_mode: bool = False,
         checkpoint_path: Optional[Path] = None,
         prompt_provider: Optional[Callable[[str], Optional[str]]] = None,
+        audio_path_resolver: Optional[Callable[[Union[str, Path]], Union[str, Path]]] = None,
         noise_reduction: bool = False,
         deepfilter_venv: Optional[Union[str, Path]] = None,
         noise_reduction_device: Optional[str] = None
@@ -55,6 +57,8 @@ class TranscriptionPipeline:
             checkpoint_path: Ruta al archivo de checkpoint para resumir transcripciones
             prompt_provider: Callback opcional que recibe audio_path y retorna prompt
                             (o None para usar el prompt por defecto del modelo)
+            audio_path_resolver: Callback opcional que recibe el path lógico/original y
+                                retorna el path físico a transcribir (ej: audio limpio cacheado)
             noise_reduction: Si es True, aplica DeepFilterNet antes de transcribir
             deepfilter_venv: Ruta al entorno virtual Python 3.9 con DeepFilterNet
             noise_reduction_device: Dispositivo para DeepFilterNet ("cpu", "cuda", o None)
@@ -65,6 +69,7 @@ class TranscriptionPipeline:
         self.append_mode = append_mode
         self.checkpoint_path = Path(checkpoint_path) if checkpoint_path else None
         self.prompt_provider = prompt_provider
+        self.audio_path_resolver = audio_path_resolver
         self._checkpoint_dict: Dict[str, TranscriptionResult] = {}
         
         # Inicializar noise reduction si está habilitado
@@ -240,23 +245,24 @@ class TranscriptionPipeline:
         for audio_path in iterator:
             cleaned_audio_path = None
             try:
-                # Aplicar noise reduction si está habilitado
-                if self._noise_reduction:
-                    cleaned_audio_path = self._apply_noise_reduction(audio_path)
+                logical_audio_path = audio_path
+
+                if self.audio_path_resolver is not None:
+                    audio_to_transcribe = self.audio_path_resolver(logical_audio_path)
+                elif self._noise_reduction:
+                    cleaned_audio_path = self._apply_noise_reduction(logical_audio_path)
                     audio_to_transcribe = cleaned_audio_path
                 else:
-                    audio_to_transcribe = audio_path
+                    audio_to_transcribe = logical_audio_path
                 
                 # Obtener prompt dinámico si hay un provider configurado
                 prompt = None
                 if self.prompt_provider:
-                    prompt = self.prompt_provider(audio_path)
+                    prompt = self.prompt_provider(str(logical_audio_path))
                 
                 result = self.model.transcribe(audio_to_transcribe, prompt=prompt)
                 
-                # Reemplazar el path del archivo limpio con el original en el resultado
-                if self._noise_reduction:
-                    result.file_path = str(audio_path)
+                result.file_path = str(logical_audio_path)
 
                 results.append(result)
                 # Guardar checkpoint incrementalmente
@@ -265,7 +271,7 @@ class TranscriptionPipeline:
                 # Crear resultado con error
                 error_result = TranscriptionResult(
                     text="",
-                    file_path=str(audio_path),
+                    file_path=str(logical_audio_path),
                     model_name=self.model.model_name,
                     metadata={"error": str(e)}
                 )
@@ -382,7 +388,9 @@ class MultiModelPipeline:
         noise_reduction: bool = False,
         deepfilter_venv: Optional[Union[str, Path]] = None,
         noise_reduction_device: Optional[str] = None,
-        prompt_provider: Optional[Callable[[str], Optional[str]]] = None
+        prompt_provider: Optional[Callable[[str], Optional[str]]] = None,
+        noise_reduction_cache_dir: Optional[Union[str, Path]] = None,
+        reuse_noise_reduction_cache: bool = True
     ):
         """
         Inicializa el pipeline multi-modelo.
@@ -397,6 +405,8 @@ class MultiModelPipeline:
             deepfilter_venv: Ruta al entorno virtual Python 3.9 con DeepFilterNet
             noise_reduction_device: Dispositivo para DeepFilterNet ("cpu", "cuda", None)
             prompt_provider: Callback opcional que recibe audio_path y retorna prompt
+            noise_reduction_cache_dir: Directorio para cachear archivos de audio limpios
+            reuse_noise_reduction_cache: Si True, reutiliza archivos de audio limpios en caché
         """
         self.models = models
         self.output_format = output_format
@@ -412,6 +422,8 @@ class MultiModelPipeline:
         self._deepfilter_wrapper = None
         self._temp_manager = None
         self._cleaned_files: List[Path] = []
+        self.noise_reduction_cache_dir = Path(noise_reduction_cache_dir) if noise_reduction_cache_dir else None
+        self.reuse_noise_reduction_cache = reuse_noise_reduction_cache
         
         if noise_reduction:
             if not NOISE_REDUCTION_AVAILABLE:
@@ -522,21 +534,39 @@ class MultiModelPipeline:
         
         for audio_path in iterator:
             try:
-                # Crear archivo temporal para el audio limpio en /tmp
-                base_name = Path(audio_path).stem
-                temp_output = self._temp_manager.create_temp(
-                    suffix=".wav",
-                    dir=None,  # Usar directorio temporal del sistema (/tmp)
-                    basename=f"{base_name}_cleaned",
-                    deterministic=True  # Nombre determinístico para checkpoint consistency
-                )
-                
-                cleaned_path = self._deepfilter_wrapper.clean_audio(
-                    input_path=audio_path,
-                    output_path=temp_output
-                )
-                cleaned_files.append(cleaned_path)
-                self._cleaned_files.append(cleaned_path)
+                audio_path = Path(audio_path)
+
+                if self.noise_reduction_cache_dir is not None:
+                    self.noise_reduction_cache_dir.mkdir(parents=True, exist_ok=True)
+                    abs_key = str(audio_path.resolve())
+                    key_hash = hashlib.sha1(abs_key.encode("utf-8")).hexdigest()[:10]
+                    cache_name = f"{audio_path.stem}__{key_hash}_cleaned.wav"
+                    cache_path = self.noise_reduction_cache_dir / cache_name
+
+                    if self.reuse_noise_reduction_cache and cache_path.exists():
+                        cleaned_path = cache_path
+                    else:
+                        cleaned_path = self._deepfilter_wrapper.clean_audio(
+                            input_path=audio_path,
+                            output_path=cache_path
+                        )
+
+                    cleaned_files.append(Path(cleaned_path))
+                else:
+                    base_name = audio_path.stem
+                    temp_output = self._temp_manager.create_temp(
+                        suffix=".wav",
+                        dir=None,
+                        basename=f"{base_name}_cleaned",
+                        deterministic=True
+                    )
+
+                    cleaned_path = self._deepfilter_wrapper.clean_audio(
+                        input_path=audio_path,
+                        output_path=temp_output
+                    )
+                    cleaned_files.append(cleaned_path)
+                    self._cleaned_files.append(cleaned_path)
                 
             except Exception as e:
                 print(f"⚠️  Noise reduction falló para {audio_path}: {e}")
@@ -584,16 +614,18 @@ class MultiModelPipeline:
             raise ValueError("No se encontraron archivos de audio válidos")
         
         # Aplicar noise reduction globalmente una sola vez si está habilitado
-        files_to_transcribe = self._apply_noise_reduction_global(valid_files)
+        cleaned_files_to_transcribe = self._apply_noise_reduction_global(valid_files)
+        original_to_cleaned: Dict[str, str] = {
+            str(Path(orig)): str(Path(cleaned))
+            for orig, cleaned in zip(valid_files, cleaned_files_to_transcribe)
+        }
         
         all_results: List[TranscriptionResult] = []
         
         try:
             # Procesar cada modelo
-            print(f"\n🔍 DEBUG: Procesando {len(self.models)} modelos: {[m.model_name for m in self.models]}")
             for idx, model in enumerate(self.models):
                 model_name = model.model_name
-                print(f"\n🔍 DEBUG: Modelo {idx+1}/{len(self.models)}: {model_name}")
                 
                 # Obtener checkpoint individual para este modelo
                 model_checkpoint = self._get_model_checkpoint_path(model_name)
@@ -604,7 +636,7 @@ class MultiModelPipeline:
                     checkpoint_results = self._checkpoint_dict[model_name]
                     checkpoint_files = {r.file_path for r in checkpoint_results if not r.metadata.get("error")}
                     # Usar valid_files (paths originales) para comparación, no files_to_transcribe (paths limpios)
-                    required_files = set(files_to_transcribe)
+                    required_files = set(valid_files)
                     
                     # Verificar si todos los archivos requeridos están en el checkpoint sin errores
                     if checkpoint_files >= required_files:
@@ -628,19 +660,14 @@ class MultiModelPipeline:
                         output_format="json",  # Guardado temporal
                         show_progress=self.show_progress,
                         prompt_provider=self.prompt_provider,  # Compartido
+                        audio_path_resolver=lambda p, _m=original_to_cleaned: _m.get(str(p), str(p)),
                         checkpoint_path=model_checkpoint  # Checkpoint individual por modelo
                     )
                     
                     # Transcribir (usando archivos limpios si se aplicó NR)
                     # El archivo temporal se guarda junto al checkpoint individual
                     temp_output = model_checkpoint.parent / f"temp_{model_name.replace('/', '_')}.json" if model_checkpoint else "/tmp/temp_results.json"
-                    results = pipeline.run(files_to_transcribe, temp_output)
-                    
-                    # Reemplazar paths de archivos limpios con originales en los resultados
-                    if self._noise_reduction:
-                        for i, result in enumerate(results):
-                            if i < len(valid_files):
-                                result.file_path = valid_files[i]
+                    results = pipeline.run(valid_files, temp_output)
                     
                     all_results.extend(results)
                     
@@ -724,7 +751,7 @@ class MultiModelPipeline:
         """
         self._cleanup_temp_files()
         if self._temp_manager:
-            self._temp_manager.cleanup_all()
+            self._temp_manager.cleanup()
     
     def run_directory(
         self,
@@ -766,6 +793,16 @@ class MultiModelPipeline:
         
         # Eliminar duplicados y ordenar
         audio_files = sorted(set(audio_files))
+        
+        # Excluir archivos del directorio de cache de noise reduction si está dentro del directorio de búsqueda
+        if self.noise_reduction_cache_dir is not None:
+            try:
+                cache_dir_resolved = self.noise_reduction_cache_dir.resolve()
+                base_dir_resolved = directory.resolve()
+                if str(cache_dir_resolved).startswith(str(base_dir_resolved) + os.sep) or cache_dir_resolved == base_dir_resolved:
+                    audio_files = [p for p in audio_files if not str(p.resolve()).startswith(str(cache_dir_resolved) + os.sep)]
+            except Exception:
+                pass
         
         print(f"Encontrados {len(audio_files)} archivos de audio en {directory}")
         
