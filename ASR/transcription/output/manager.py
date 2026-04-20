@@ -361,3 +361,95 @@ class OutputManager:
         files = len(set(r.file_path for r in transcription_results))
         print(f"   Modelos: {', '.join(sorted(models))}")
         print(f"   Archivos: {files}")
+    
+    @staticmethod
+    def merge_checkpoints_to_csv(
+        checkpoint_dir: Union[str, Path],
+        csv_path: Union[str, Path],
+        pattern: str = "checkpoint_*.json",
+        model_column: str = "model",
+        append: bool = False
+    ) -> None:
+        """
+        Combina múltiples archivos checkpoint en un único CSV.
+        
+        Busca todos los checkpoints que coincidan con el patrón en el directorio
+        especificado, los carga y genera una tabla CSV consolidada.
+        
+        Args:
+            checkpoint_dir: Directorio donde buscar los checkpoints
+            csv_path: Ruta al archivo CSV de salida
+            pattern: Patrón glob para filtrar checkpoints (default: "checkpoint_*.json")
+            model_column: Nombre de la columna para el modelo
+            append: Si True, añade al CSV existente; si False, sobrescribe
+        """
+        checkpoint_dir = Path(checkpoint_dir)
+        csv_path = Path(csv_path)
+        
+        if not checkpoint_dir.exists():
+            raise FileNotFoundError(f"Directorio no encontrado: {checkpoint_dir}")
+        
+        # Encontrar todos los checkpoints
+        checkpoint_files = list(checkpoint_dir.glob(pattern))
+        
+        if not checkpoint_files:
+            print(f"⚠️  No se encontraron checkpoints con patrón '{pattern}' en {checkpoint_dir}")
+            return
+        
+        print(f"📁 Encontrados {len(checkpoint_files)} checkpoints en {checkpoint_dir}")
+        
+        # Cargar y combinar todos los resultados
+        from ..base import TranscriptionResult
+        all_results: List[TranscriptionResult] = []
+        
+        for checkpoint_path in sorted(checkpoint_files):
+            try:
+                with open(checkpoint_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                results = data.get("results", [])
+                if not results:
+                    print(f"   ⚠️  {checkpoint_path.name}: sin resultados")
+                    continue
+                
+                for entry in results:
+                    result = TranscriptionResult(
+                        text=entry.get("text", ""),
+                        file_path=entry.get("file_path", ""),
+                        model_name=entry.get("model_name", ""),
+                        timestamps=entry.get("timestamps"),
+                        confidence=entry.get("confidence"),
+                        duration=entry.get("duration"),
+                        metadata=entry.get("metadata", {})
+                    )
+                    all_results.append(result)
+                
+                print(f"   ✅ {checkpoint_path.name}: {len(results)} resultados")
+                
+            except Exception as e:
+                print(f"   ❌ {checkpoint_path.name}: error - {e}")
+                continue
+        
+        if not all_results:
+            print("⚠️  No hay resultados para exportar")
+            return
+        
+        # Guardar en CSV
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        manager = OutputManager(format="csv")
+        
+        if append and csv_path.exists():
+            manager.append(all_results, csv_path, model_column)
+            print(f"\n✅ Añadidos {len(all_results)} resultados a {csv_path}")
+        else:
+            manager.save(all_results, csv_path, model_column)
+            mode_str = "actualizado" if append else "creado"
+            print(f"\n✅ CSV {mode_str}: {csv_path}")
+        
+        # Mostrar resumen
+        models = set(r.model_name for r in all_results)
+        files = len(set(r.file_path for r in all_results))
+        print(f"   Total modelos: {len(models)}")
+        print(f"   Total archivos: {files}")
+        print(f"   Total resultados: {len(all_results)}")
+        print(f"   Modelos: {', '.join(sorted(models))}")

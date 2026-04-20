@@ -280,6 +280,58 @@ python -m ASR.transcription.cli \
 | `--deepfilter-venv` | path | Path to Python 3.9 venv with DeepFilterNet (required with --noise-reduction) |
 | `--noise-reduction-device` | cpu, cuda | Device for DeepFilterNet (default: auto) |
 
+### MultiModelPipeline (Multiple Models Comparison)
+
+Compare multiple ASR models on the same audio files with checkpointing and noise reduction caching.
+
+```python
+from ASR.transcription import WhisperModel, MultiModelPipeline
+
+# Define multiple models
+models = {
+    "tiny": WhisperModel(model_name="tiny", device="auto"),
+    "medium": WhisperModel(model_name="medium", device="auto"),
+    "large-v3": WhisperModel(model_name="large-v3", device="auto"),
+}
+
+# Create multi-model pipeline with advanced features
+pipeline = MultiModelPipeline(
+    models=models,
+    output_format="csv",
+    checkpoint_path="./checkpoint.json",      # Resume if interrupted
+    append_mode=True,                           # Add to existing CSV
+    noise_reduction=True,
+    deepfilter_venv="./.venv-deepfilter",
+    noise_reduction_cache_dir="./cleaned_cache",  # Cache cleaned audio
+    reuse_noise_reduction_cache=True,             # Reuse if exists
+)
+
+# Process directory - models run sequentially with GPU cleanup between them
+results = pipeline.run_directory(
+    directory="./audio",
+    output_path="./comparison.csv",
+    recursive=True
+)
+```
+
+**MultiModelPipeline Features:**
+
+| Feature | Description |
+|---------|-------------|
+| `checkpoint_path` | JSON file to resume interrupted transcriptions per model |
+| `append_mode` | Add results to existing CSV (CSV only) |
+| `noise_reduction_cache_dir` | Directory to cache cleaned audio files for reuse |
+| `reuse_noise_reduction_cache` | Use cached files if they exist (no re-validation) |
+| Global noise reduction | Applied once per file, shared across all models |
+| Memory cleanup | Explicit GPU/memory cleanup after each model |
+| Original paths | Checkpoints and results always show original file paths |
+
+**Cache Directory Behavior:**
+
+- Cached files use hash-based naming: `{stem}__{hash}_cleaned.wav`
+- Cache directory is automatically excluded from audio discovery when nested in input
+- Temp files in `/tmp` are cleaned up automatically (unless cached)
+
 ### Output Format
 
 **CSV**: One row per model, columns are audio files
@@ -608,7 +660,34 @@ if wrapper.is_available():
 1. **On-the-fly**: El pipeline crea archivos temporales para el audio limpio
 2. **Subprocess**: DeepFilterNet se ejecuta en el venv Python 3.9 vía subprocess
 3. **Fallback**: Si la limpieza falla, se usa el audio original con un warning
-4. **Limpieza**: Los archivos temporales se eliminan automáticamente
+4. **Limpieza**: Los archivos temporales se eliminan automáticamente (en `/tmp`)
+
+### Cache de Audio Limpio (MultiModelPipeline)
+
+Para evitar regenerar archivos limpios en ejecuciones posteriores:
+
+```python
+from ASR.transcription import MultiModelPipeline, WhisperModel
+
+models = {"large": WhisperModel("large-v3")}
+
+pipeline = MultiModelPipeline(
+    models=models,
+    noise_reduction=True,
+    deepfilter_venv="./.venv-deepfilter",
+    noise_reduction_cache_dir="./cleaned_audio",  # Cache persistente
+    reuse_noise_reduction_cache=True,               # Reutilizar si existe
+)
+
+# Primera ejecución: genera y guarda archivos limpios
+# Segunda ejecución: usa archivos cacheados (sin ejecutar DeepFilterNet)
+```
+
+**Características del cache:**
+
+- Nombres determinísticos basados en hash del path original
+- Exclusión automática del directorio de cache en búsquedas recursivas
+- Compatible con checkpointing - siempre guarda rutas originales
 
 ---
 
