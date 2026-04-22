@@ -681,17 +681,43 @@ class MultiModelPipeline:
                     
                     # Liberar memoria/GPU del modelo actual antes de cargar el siguiente
                     print(f"🧹 Liberando memoria del modelo '{model_name}'...")
+                    
+                    # Primero: descargar el modelo explícitamente (esto libera los pesos de GPU)
+                    if hasattr(model, 'unload'):
+                        model.unload()
+                    
+                    # Eliminar referencias
                     del pipeline
                     del model
+                    
+                    # Forzar garbage collection
                     import gc
                     gc.collect()
+                    
+                    # Sincronizar y limpiar CUDA
                     try:
                         import torch
                         if torch.cuda.is_available():
+                            # Sincronizar para asegurar que todas las operaciones terminaron
+                            torch.cuda.synchronize()
+                            
+                            # Log de memoria antes de limpiar
+                            allocated_before = torch.cuda.memory_allocated() / 1024**2
+                            reserved_before = torch.cuda.memory_reserved() / 1024**2
+                            
+                            # Limpiar caché
                             torch.cuda.empty_cache()
+                            
+                            # Log de memoria después
+                            allocated_after = torch.cuda.memory_allocated() / 1024**2
+                            reserved_after = torch.cuda.memory_reserved() / 1024**2
+                            
+                            print(f"📊 VRAM: {allocated_before:.1f}MB -> {allocated_after:.1f}MB (allocated)")
+                            print(f"📊 VRAM: {reserved_before:.1f}MB -> {reserved_after:.1f}MB (reserved)")
                             print(f"✅ GPU cache liberada")
                     except ImportError:
                         pass
+                    
                     print(f"✅ Memoria liberada para '{model_name}'")
         
         finally:
