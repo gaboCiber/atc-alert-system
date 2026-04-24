@@ -100,6 +100,10 @@ class TranscriptionPipeline:
         if self.checkpoint_path:
             self._load_checkpoint()
     
+    def _normalize_path(self, path: Union[str, Path]) -> str:
+        """Normaliza una ruta para comparación consistente."""
+        return os.path.normpath(os.path.abspath(str(path)))
+    
     def _load_checkpoint(self) -> None:
         """Carga checkpoint existente si está disponible."""
         if self.checkpoint_path and self.checkpoint_path.exists():
@@ -107,7 +111,9 @@ class TranscriptionPipeline:
             checkpoint_results = self.output_manager.load_checkpoint(self.checkpoint_path)
             if checkpoint_results:
                 for result in checkpoint_results:
-                    self._checkpoint_dict[result.file_path] = result
+                    # Normalizar el path para comparación consistente
+                    normalized_path = self._normalize_path(result.file_path)
+                    self._checkpoint_dict[normalized_path] = result
                 print(f"Checkpoint cargado: {len(self._checkpoint_dict)} transcripciones")
     
     def _apply_noise_reduction(self, audio_path: Union[str, Path]) -> Path:
@@ -161,17 +167,22 @@ class TranscriptionPipeline:
             return [str(f) for f in audio_files]
         
         filtered = []
+        already_processed = 0
         for file in audio_files:
-            file_str = str(file)
+            # Normalizar path para comparación consistente
+            file_str = self._normalize_path(file)
             if file_str in self._checkpoint_dict:
                 result = self._checkpoint_dict[file_str]
                 # Reintentar si falló, saltar si fue exitoso
                 if result.metadata.get("error"):
-                    filtered.append(file_str)
+                    filtered.append(str(file))  # Mantener path original para procesar
+                else:
+                    already_processed += 1
             else:
                 # Archivo nuevo, procesar
-                filtered.append(file_str)
+                filtered.append(str(file))
         
+        print(f"Checkpoint: {already_processed} archivos ya procesados, {len(filtered)} pendientes")
         return filtered
     
     def _save_checkpoint_incremental(self, result: TranscriptionResult) -> None:
