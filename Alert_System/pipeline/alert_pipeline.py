@@ -124,6 +124,31 @@ class AlertPipeline:
         self.rule_engine = rule_engine
         self.state_projector = StateProjector()
     
+    def load_kex_rules(self, rules: List[Any]) -> int:
+        """
+        Carga reglas del KEX (Knowledge Extractor) en el RuleEngine.
+        
+        Args:
+            rules: Lista de reglas del KEX (tipo Rule del Knowledge_Extractor)
+            
+        Returns:
+            Número de reglas cargadas exitosamente
+        """
+        from Alert_System.integration.kex_adapter import KEXAdapter
+        
+        adapter = KEXAdapter()
+        evaluators = adapter.adapt_rules(rules)
+        
+        loaded_count = 0
+        for evaluator in evaluators:
+            try:
+                self.rule_engine.add_rule(evaluator)
+                loaded_count += 1
+            except Exception as e:
+                print(f"⚠️ Error cargando regla en RuleEngine: {e}")
+        
+        return loaded_count
+    
     def process_instruction(
         self,
         raw_instruction: str,
@@ -524,31 +549,40 @@ class AlertPipeline:
         projected: ProjectedState,
         callsign: str,
     ) -> List[Violation]:
-        """Evalúa reglas de altitud."""
+        """Evalúa reglas de altitud usando RuleEngine."""
         violations = []
         
         aircraft = projected.get_aircraft(callsign)
         if not aircraft:
             return violations
         
-        altitude = aircraft.position.altitude
-        msa = projected.traffic_state.msa
-        
-        # Verificar MSA
-        if altitude < msa:
-            from Alert_System.models.alert import AlertCategory, AlertSeverity
-            violations.append(Violation(
-                violation_id=f"VIO_{uuid.uuid4().hex[:8]}",
-                rule_id="MSA_RULE",
-                condition_type="ALTITUDE_MINIMUM",
-                severity=AlertSeverity.CRITICAL,
-                explanation=f"Altitude {altitude}ft below MSA {msa}ft",
-                details={
-                    "aircraft_involved": [callsign],
-                    "expected_minimum": msa,
-                    "actual_altitude": altitude,
-                },
-            ))
+        # Usar RuleEngine.evaluate_all() para evaluar todas las reglas de altitud
+        if self.rule_engine.has_evaluator("ALTITUDE"):
+            altitude_evaluator = self.rule_engine._evaluator_instances.get("ALTITUDE")
+            if altitude_evaluator and hasattr(altitude_evaluator, 'evaluate_all'):
+                altitude_violations = altitude_evaluator.evaluate_all(
+                    traffic_state=projected.traffic_state,
+                    aircraft_callsign=callsign,
+                )
+                violations.extend(altitude_violations)
+        else:
+            # Fallback: evaluación manual si no hay evaluador registrado
+            altitude = aircraft.position.altitude
+            msa = projected.traffic_state.msa
+            if altitude < msa:
+                from Alert_System.models.alert import AlertCategory, AlertSeverity
+                violations.append(Violation(
+                    violation_id=f"VIO_{uuid.uuid4().hex[:8]}",
+                    rule_id="MSA_RULE",
+                    condition_type="ALTITUDE_MINIMUM",
+                    severity=AlertSeverity.CRITICAL,
+                    explanation=f"Altitude {altitude}ft below MSA {msa}ft",
+                    details={
+                        "aircraft_involved": [callsign],
+                        "expected_minimum": msa,
+                        "actual_altitude": altitude,
+                    },
+                ))
         
         return violations
     
@@ -558,32 +592,47 @@ class AlertPipeline:
         projected: ProjectedState,
         callsign: str,
     ) -> List[Violation]:
-        """Evalúa reglas de separación."""
+        """Evalúa reglas de separación usando RuleEngine."""
         violations = []
         
         # Usar separaciones pre-calculadas en la proyección
         separations = projected.projected_separations.get(callsign, [])
         
-        for sep in separations:
-            if sep.conflict_predicted:
-                from Alert_System.models.alert import AlertCategory, AlertSeverity
-                violations.append(Violation(
-                    violation_id=f"VIO_{uuid.uuid4().hex[:8]}",
-                    rule_id="SEPARATION_RULE",
-                    condition_type="SEPARATION_VERTICAL",
-                    severity=AlertSeverity.CRITICAL,
-                    explanation=(
-                        f"Predicted loss of separation with {sep.aircraft_2} "
-                        f"in {sep.time_to_conflict}s"
-                    ),
-                    details={
-                        "aircraft_involved": [callsign, sep.aircraft_2],
-                        "expected_vertical": 1000,
-                        "expected_horizontal_nm": 5,
-                        "actual_vertical": sep.vertical_separation_ft,
-                        "actual_horizontal_nm": sep.horizontal_separation_nm,
-                    },
-                ))
+        # Usar RuleEngine.evaluate_all() para evaluar todas las reglas de separación
+        if self.rule_engine.has_evaluator("SEPARATION") and separations:
+            separation_evaluator = self.rule_engine._evaluator_instances.get("SEPARATION")
+            if separation_evaluator and hasattr(separation_evaluator, 'evaluate_all'):
+                # Preparar datos de separación en el estado para que el evaluador los use
+                for sep in separations:
+                    if sep.conflict_predicted:
+                        separation_violations = separation_evaluator.evaluate_all(
+                            traffic_state=projected.traffic_state,
+                            aircraft_callsign=callsign,
+                        )
+                        violations.extend(separation_violations)
+                        break  # evaluate_all procesa todas las reglas de una vez
+        else:
+            # Fallback: evaluación manual si no hay evaluador
+            for sep in separations:
+                if sep.conflict_predicted:
+                    from Alert_System.models.alert import AlertCategory, AlertSeverity
+                    violations.append(Violation(
+                        violation_id=f"VIO_{uuid.uuid4().hex[:8]}",
+                        rule_id="SEPARATION_RULE",
+                        condition_type="SEPARATION_VERTICAL",
+                        severity=AlertSeverity.CRITICAL,
+                        explanation=(
+                            f"Predicted loss of separation with {sep.aircraft_2} "
+                            f"in {sep.time_to_conflict}s"
+                        ),
+                        details={
+                            "aircraft_involved": [callsign, sep.aircraft_2],
+                            "expected_vertical": 1000,
+                            "expected_horizontal_nm": 5,
+                            "actual_vertical": sep.vertical_separation_ft,
+                            "actual_horizontal_nm": sep.horizontal_separation_nm,
+                        },
+                    ))
         
         return violations
     
@@ -593,7 +642,7 @@ class AlertPipeline:
         projected: ProjectedState,
         callsign: str,
     ) -> List[Violation]:
-        """Evalúa reglas de pista."""
+        """Evalúa reglas de pista usando RuleEngine."""
         violations = []
         
         # Verificar si es instrucción de pista
@@ -607,22 +656,32 @@ class AlertPipeline:
         if not runway:
             return violations
         
-        # Verificar si pista está ocupada
-        runway_state = projected.traffic_state.runways.get(runway)
-        if runway_state and runway_state.occupied_by:
-            from Alert_System.models.alert import AlertCategory, AlertSeverity
-            violations.append(Violation(
-                violation_id=f"VIO_{uuid.uuid4().hex[:8]}",
-                rule_id="RUNWAY_RULE",
-                condition_type="RUNWAY_AVAILABLE",
-                severity=AlertSeverity.CRITICAL,
-                explanation=f"Runway {runway} occupied by {runway_state.occupied_by}",
-                details={
-                    "aircraft_involved": [callsign, runway_state.occupied_by],
-                    "runway": runway,
-                    "occupied_by": runway_state.occupied_by,
-                },
-            ))
+        # Usar RuleEngine.evaluate_all() para evaluar todas las reglas de pista
+        if self.rule_engine.has_evaluator("RUNWAY"):
+            runway_evaluator = self.rule_engine._evaluator_instances.get("RUNWAY")
+            if runway_evaluator and hasattr(runway_evaluator, 'evaluate_all'):
+                runway_violations = runway_evaluator.evaluate_all(
+                    traffic_state=projected.traffic_state,
+                    aircraft_callsign=callsign,
+                )
+                violations.extend(runway_violations)
+        else:
+            # Fallback: evaluación manual si no hay evaluador
+            runway_state = projected.traffic_state.runways.get(runway)
+            if runway_state and runway_state.occupied_by:
+                from Alert_System.models.alert import AlertCategory, AlertSeverity
+                violations.append(Violation(
+                    violation_id=f"VIO_{uuid.uuid4().hex[:8]}",
+                    rule_id="RUNWAY_RULE",
+                    condition_type="RUNWAY_AVAILABLE",
+                    severity=AlertSeverity.CRITICAL,
+                    explanation=f"Runway {runway} occupied by {runway_state.occupied_by}",
+                    details={
+                        "aircraft_involved": [callsign, runway_state.occupied_by],
+                        "runway": runway,
+                        "occupied_by": runway_state.occupied_by,
+                    },
+                ))
         
         return violations
     

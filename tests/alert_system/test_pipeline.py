@@ -592,6 +592,7 @@ class TestRunwayRuleEvaluation:
         traffic.add_runway(RunwayState(
             runway_id="04L",
             mode=RunwayOperationMode.LANDING,
+            occupied=True,
             occupied_by="UAL456",
             occupied_until=None,
         ))
@@ -642,3 +643,731 @@ class TestRunwayRuleEvaluation:
         violations = alert_pipeline._evaluate_runway_rules(parsed, projected, "AAL123")
         
         assert len(violations) == 0
+
+
+class TestMultipleRuleEvaluation:
+    """Tests para evaluación de múltiples reglas del mismo tipo."""
+    
+    def test_multiple_altitude_rules(self, alert_pipeline):
+        """Evaluar múltiples reglas de altitud registradas."""
+        from Alert_System.rule_engine.conditions import AltitudeCondition
+        from Alert_System.core.state_projection import StateProjector
+        
+        # Obtener el evaluador de altitud
+        altitude_evaluator = alert_pipeline.rule_engine._evaluator_instances.get("ALTITUDE")
+        if not altitude_evaluator:
+            pytest.skip("AltitudeCondition no registrado")
+        
+        # Limpiar reglas existentes
+        altitude_evaluator.clear_rules()
+        
+        # Agregar múltiples reglas de altitud
+        altitude_evaluator.add_rule({
+            "condition_type": "ALTITUDE",
+            "parameters": {
+                "check_type": "MINIMUM",
+                "reference_value": 3000,
+                "rule_id": "MIN_3000"
+            }
+        })
+        altitude_evaluator.add_rule({
+            "condition_type": "ALTITUDE",
+            "parameters": {
+                "check_type": "MAXIMUM",
+                "reference_value": 45000,
+                "rule_id": "MAX_45000"
+            }
+        })
+        
+        # Crear estado con aeronave a 2000ft (violación de MIN_3000)
+        traffic = TrafficState(sector_id="KJFK", msa=5000)
+        traffic.add_aircraft(AircraftState(
+            callsign="AAL123",
+            position=Position(latitude=40.0, longitude=-75.0, altitude=2000, heading=270, speed=250),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        
+        # Evaluar todas las reglas
+        violations = altitude_evaluator.evaluate_all(traffic, "AAL123")
+        
+        # Debería detectar la violación de MIN_3000
+        assert len(violations) >= 1
+        rule_ids = [v.rule_id for v in violations]
+        assert "MIN_3000" in rule_ids
+        
+        # Limpiar reglas
+        altitude_evaluator.clear_rules()
+    
+    def test_mixed_rule_types(self, alert_pipeline):
+        """Evaluar reglas de múltiples tipos (ALTITUDE + SEPARATION + RUNWAY)."""
+        from Alert_System.rule_engine.conditions import AltitudeCondition, SeparationCondition, RunwayCondition
+        from Alert_System.core.state_projection import StateProjector
+        
+        # Obtener evaluadores
+        altitude_evaluator = alert_pipeline.rule_engine._evaluator_instances.get("ALTITUDE")
+        separation_evaluator = alert_pipeline.rule_engine._evaluator_instances.get("SEPARATION")
+        runway_evaluator = alert_pipeline.rule_engine._evaluator_instances.get("RUNWAY")
+        
+        if not all([altitude_evaluator, separation_evaluator, runway_evaluator]):
+            pytest.skip("No todos los evaluadores están registrados")
+        
+        # Limpiar reglas
+        altitude_evaluator.clear_rules()
+        separation_evaluator.clear_rules()
+        runway_evaluator.clear_rules()
+        
+        # Agregar reglas de diferentes tipos
+        altitude_evaluator.add_rule({
+            "condition_type": "ALTITUDE",
+            "parameters": {
+                "check_type": "MINIMUM",
+                "reference_value": 3000,
+                "rule_id": "MIN_3000"
+            }
+        })
+        
+        separation_evaluator.add_rule({
+            "condition_type": "SEPARATION",
+            "parameters": {
+                "separation_type": "BOTH",
+                "min_distance": 5,
+                "rule_id": "SEP_5NM"
+            }
+        })
+        
+        # Crear estado con violación de altitud
+        traffic = TrafficState(sector_id="KJFK", msa=5000)
+        traffic.add_aircraft(AircraftState(
+            callsign="AAL123",
+            position=Position(latitude=40.0, longitude=-75.0, altitude=2000, heading=270, speed=250),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        
+        # Evaluar cada tipo
+        altitude_violations = altitude_evaluator.evaluate_all(traffic, "AAL123")
+        separation_violations = separation_evaluator.evaluate_all(traffic, "AAL123")
+        runway_violations = runway_evaluator.evaluate_all(traffic, "AAL123")
+        
+        # Verificar que se detectan violaciones de altitud
+        assert len(altitude_violations) >= 1
+        
+        # Limpiar reglas
+        altitude_evaluator.clear_rules()
+        separation_evaluator.clear_rules()
+        runway_evaluator.clear_rules()
+    
+    def test_no_rules_registered(self, alert_pipeline):
+        """Evaluar sin reglas registradas debe usar defaults."""
+        from Alert_System.rule_engine.conditions import AltitudeCondition
+        from Alert_System.core.state_projection import StateProjector
+        
+        altitude_evaluator = alert_pipeline.rule_engine._evaluator_instances.get("ALTITUDE")
+        if not altitude_evaluator:
+            pytest.skip("AltitudeCondition no registrado")
+        
+        # Limpiar todas las reglas
+        altitude_evaluator.clear_rules()
+        
+        # Crear estado con aeronave por debajo de MSA
+        traffic = TrafficState(sector_id="KJFK", msa=5000)
+        traffic.add_aircraft(AircraftState(
+            callsign="AAL123",
+            position=Position(latitude=40.0, longitude=-75.0, altitude=4000, heading=270, speed=250),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        
+        # Evaluar sin reglas específicas (debería usar default MSA_CHECK)
+        violations = altitude_evaluator.evaluate_all(traffic, "AAL123")
+        
+        # Debería detectar violación de MSA usando default
+        assert len(violations) >= 1
+
+
+class TestEndToEndScenarios:
+    """Tests end-to-end para escenarios completos de tráfico aéreo."""
+    
+    def test_descent_sequence_with_multiple_rules(self, alert_pipeline):
+        """Escenario: Secuencia de descenso con evaluación continua de reglas."""
+        from Alert_System.core.state_projection import StateProjector
+        
+        # Configurar estado inicial: aeronave a 15000ft, MSA 5000ft
+        traffic = TrafficState(sector_id="KJFK", msa=5000)
+        traffic.add_aircraft(AircraftState(
+            callsign="AAL123",
+            position=Position(latitude=40.0, longitude=-75.0, altitude=15000, heading=270, speed=250),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        
+        # Instrucción 1: Descenso a 10000ft (no debería generar alerta)
+        parsed1 = ParsedInstruction(
+            raw_text="AAL123 descend to 10000",
+            normalized_text="AAL123 descend to 10000",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.DESCENT,
+            action_verb="descend",
+            parameters={"target_altitude": 10000},
+        )
+        
+        projector1 = StateProjector()
+        projected1 = projector1.create_projection(traffic, parsed1, 5)
+        violations1 = alert_pipeline._evaluate_altitude_rules(parsed1, projected1, "AAL123")
+        
+        # No debería haber violación de MSA (10000ft > 5000ft)
+        assert len(violations1) == 0
+        
+        # Instrucción 2: Descenso a 4000ft (debería generar alerta MSA)
+        parsed2 = ParsedInstruction(
+            raw_text="AAL123 descend to 4000",
+            normalized_text="AAL123 descend to 4000",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.DESCENT,
+            action_verb="descend",
+            parameters={"target_altitude": 4000},
+        )
+        
+        projector2 = StateProjector()
+        projected2 = projector2.create_projection(traffic, parsed2, 5)
+        violations2 = alert_pipeline._evaluate_altitude_rules(parsed2, projected2, "AAL123")
+        
+        # Debería haber violación de MSA (4000ft < 5000ft)
+        assert len(violations2) >= 1
+        assert any("MSA" in v.explanation for v in violations2)
+    
+    def test_takeoff_sequence_with_runway_conflict(self, alert_pipeline):
+        """Escenario: Secuencia de despegue con conflicto de pista ocupada."""
+        from Alert_System.core.state_projection import StateProjector
+        
+        # Configurar estado: pista 04L ocupada por otra aeronave
+        traffic = TrafficState(sector_id="KJFK", msa=5000)
+        traffic.add_runway(RunwayState(
+            runway_id="04L",
+            occupied=True,
+            occupied_by="UAL456",
+        ))
+        traffic.add_aircraft(AircraftState(
+            callsign="AAL123",
+            position=Position(latitude=40.0, longitude=-75.0, altitude=0, heading=90, speed=0),
+            flight_phase=FlightPhase.GROUND,
+        ))
+        
+        # Instrucción de despegue: debería generar alerta de pista ocupada
+        parsed = ParsedInstruction(
+            raw_text="AAL123 cleared for takeoff runway 04L",
+            normalized_text="AAL123 cleared for takeoff runway 04L",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.TAKEOFF_CLEARANCE,
+            action_verb="takeoff",
+            parameters={"runway": "04L"},
+        )
+        
+        projector = StateProjector()
+        projected = projector.create_projection(traffic, parsed, 5)
+        violations = alert_pipeline._evaluate_runway_rules(parsed, projected, "AAL123")
+        
+        # Debería detectar pista ocupada
+        assert len(violations) >= 1
+        assert any("04L" in v.explanation for v in violations)
+    
+    def test_multiple_aircraft_separation_scenario(self, alert_pipeline):
+        """Escenario: Múltiples aeronaves con evaluación de separación."""
+        from Alert_System.core.state_projection import StateProjector
+        
+        # Configurar estado con dos aeronaves cercanas
+        traffic = TrafficState(sector_id="KJFK", msa=5000)
+        traffic.add_aircraft(AircraftState(
+            callsign="AAL123",
+            position=Position(latitude=40.0, longitude=-75.0, altitude=10000, heading=270, speed=250),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        traffic.add_aircraft(AircraftState(
+            callsign="UAL456",
+            position=Position(latitude=40.01, longitude=-75.01, altitude=10000, heading=90, speed=250),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        
+        # Instrucción de cambio de rumbo para AAL123
+        parsed = ParsedInstruction(
+            raw_text="AAL123 turn left heading 180",
+            normalized_text="AAL123 turn left heading 180",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.TURN_LEFT,
+            action_verb="turn",
+            parameters={"heading": 180},
+        )
+        
+        projector = StateProjector()
+        projected = projector.create_projection(traffic, parsed, 5)
+        
+        # Evaluar separación
+        violations = alert_pipeline._evaluate_separation_rules(parsed, projected, "AAL123")
+        
+        # Verificar que el sistema de separación funciona
+        # (puede o no detectar conflicto dependiendo de la distancia exacta)
+        # Lo importante es que no falle al evaluar
+        assert isinstance(violations, list)
+    
+    def test_complex_approach_scenario(self, alert_pipeline):
+        """Escenario complejo: aproximación con múltiples aeronaves y reglas."""
+        from Alert_System.core.state_projection import StateProjector
+        
+        # Configurar escenario de aproximación: 3 aeronaves en aproximación
+        traffic = TrafficState(sector_id="KJFK", msa=3000)
+        
+        # AAL123: en aproximación final a 4000ft
+        traffic.add_aircraft(AircraftState(
+            callsign="AAL123",
+            position=Position(latitude=40.6, longitude=-73.8, altitude=4000, heading=270, speed=180),
+            flight_phase=FlightPhase.APPROACH,
+        ))
+        
+        # UAL456: en aproximación a 5000ft, detrás de AAL123
+        traffic.add_aircraft(AircraftState(
+            callsign="UAL456",
+            position=Position(latitude=40.65, longitude=-73.85, altitude=5000, heading=270, speed=190),
+            flight_phase=FlightPhase.APPROACH,
+        ))
+        
+        # DAL789: en base a 6000ft
+        traffic.add_aircraft(AircraftState(
+            callsign="DAL789",
+            position=Position(latitude=40.7, longitude=-73.9, altitude=6000, heading=270, speed=200),
+            flight_phase=FlightPhase.APPROACH,
+        ))
+        
+        # Pistas disponibles
+        traffic.add_runway(RunwayState(
+            runway_id="22L",
+            occupied=False,
+            occupied_by=None,
+        ))
+        traffic.add_runway(RunwayState(
+            runway_id="22R",
+            occupied=True,
+            occupied_by="JBL555",
+        ))
+        
+        # Secuencia de instrucciones
+        
+        # 1. AAL123 autorizado para aterrizar en 22L (pista libre)
+        parsed1 = ParsedInstruction(
+            raw_text="AAL123 cleared ILS approach runway 22L",
+            normalized_text="AAL123 cleared ILS approach runway 22L",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.LANDING_CLEARANCE,
+            action_verb="cleared",
+            parameters={"runway": "22L"},
+        )
+        
+        projector1 = StateProjector()
+        projected1 = projector1.create_projection(traffic, parsed1, 5)
+        violations1 = alert_pipeline._evaluate_runway_rules(parsed1, projected1, "AAL123")
+        
+        # El evaluador puede detectar violaciones de otras pistas
+        # Lo importante es que no detecte violación de 22L
+        runway_22l_violations = [v for v in violations1 if "22L" in v.explanation]
+        assert len(runway_22l_violations) == 0  # 22L está libre
+        
+        # 2. UAL456 descenso a 3000ft (violación MSA 3000ft, está en el límite)
+        parsed2 = ParsedInstruction(
+            raw_text="UAL456 descend to 3000",
+            normalized_text="UAL456 descend to 3000",
+            speaker=Speaker.ATCO,
+            callsign="UAL456",
+            instruction_type=InstructionType.DESCENT,
+            action_verb="descend",
+            parameters={"target_altitude": 3000},
+        )
+        
+        projector2 = StateProjector()
+        projected2 = projector2.create_projection(traffic, parsed2, 5)
+        violations2 = alert_pipeline._evaluate_altitude_rules(parsed2, projected2, "UAL456")
+        
+        # 3000ft == MSA, no debería haber violación
+        assert len(violations2) == 0
+        
+        # 3. UAL456 descenso a 2500ft (violación MSA)
+        parsed3 = ParsedInstruction(
+            raw_text="UAL456 descend to 2500",
+            normalized_text="UAL456 descend to 2500",
+            speaker=Speaker.ATCO,
+            callsign="UAL456",
+            instruction_type=InstructionType.DESCENT,
+            action_verb="descend",
+            parameters={"target_altitude": 2500},
+        )
+        
+        projector3 = StateProjector()
+        projected3 = projector3.create_projection(traffic, parsed3, 5)
+        violations3 = alert_pipeline._evaluate_altitude_rules(parsed3, projected3, "UAL456")
+        
+        # Debería detectar violación MSA (2500ft < 3000ft)
+        assert len(violations3) >= 1
+        assert any("MSA" in v.explanation for v in violations3)
+        
+        # 4. DAL789 autorizado para aterrizar en 22R (pista ocupada)
+        parsed4 = ParsedInstruction(
+            raw_text="DAL789 cleared ILS approach runway 22R",
+            normalized_text="DAL789 cleared ILS approach runway 22R",
+            speaker=Speaker.ATCO,
+            callsign="DAL789",
+            instruction_type=InstructionType.LANDING_CLEARANCE,
+            action_verb="cleared",
+            parameters={"runway": "22R"},
+        )
+        
+        projector4 = StateProjector()
+        projected4 = projector4.create_projection(traffic, parsed4, 5)
+        violations4 = alert_pipeline._evaluate_runway_rules(parsed4, projected4, "DAL789")
+        
+        # Debería detectar pista ocupada
+        assert len(violations4) >= 1
+        assert any("22R" in v.explanation for v in violations4)
+    
+    def test_multi_step_climb_descent_scenario(self, alert_pipeline):
+        """Escenario: Secuencia larga de subidas y bajadas con múltiples aeronaves."""
+        from Alert_System.core.state_projection import StateProjector
+        
+        # Configurar estado inicial
+        traffic = TrafficState(sector_id="KJFK", msa=5000)
+        
+        # AAL123: crucero a 35000ft
+        traffic.add_aircraft(AircraftState(
+            callsign="AAL123",
+            position=Position(latitude=40.0, longitude=-75.0, altitude=35000, heading=270, speed=450),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        
+        # UAL456: crucero a 34000ft (1000ft debajo)
+        traffic.add_aircraft(AircraftState(
+            callsign="UAL456",
+            position=Position(latitude=40.01, longitude=-75.01, altitude=34000, heading=270, speed=440),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        
+        # Secuencia de 6 instrucciones
+        
+        # 1. AAL123 subir a 37000ft
+        parsed1 = ParsedInstruction(
+            raw_text="AAL123 climb to 37000",
+            normalized_text="AAL123 climb to 37000",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.CLIMB,
+            action_verb="climb",
+            parameters={"target_altitude": 37000},
+        )
+        
+        projector1 = StateProjector()
+        projected1 = projector1.create_projection(traffic, parsed1, 5)
+        violations1 = alert_pipeline._evaluate_altitude_rules(parsed1, projected1, "AAL123")
+        assert len(violations1) == 0  # 37000ft es seguro
+        
+        # 2. UAL456 subir a 36000ft (se acerca a AAL123)
+        parsed2 = ParsedInstruction(
+            raw_text="UAL456 climb to 36000",
+            normalized_text="UAL456 climb to 36000",
+            speaker=Speaker.ATCO,
+            callsign="UAL456",
+            instruction_type=InstructionType.CLIMB,
+            action_verb="climb",
+            parameters={"target_altitude": 36000},
+        )
+        
+        projector2 = StateProjector()
+        projected2 = projector2.create_projection(traffic, parsed2, 5)
+        violations2 = alert_pipeline._evaluate_altitude_rules(parsed2, projected2, "UAL456")
+        assert len(violations2) == 0  # 36000ft es seguro
+        
+        # 3. AAL123 bajar a 35000ft (vuelve a altitud original)
+        parsed3 = ParsedInstruction(
+            raw_text="AAL123 descend to 35000",
+            normalized_text="AAL123 descend to 35000",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.DESCENT,
+            action_verb="descend",
+            parameters={"target_altitude": 35000},
+        )
+        
+        projector3 = StateProjector()
+        projected3 = projector3.create_projection(traffic, parsed3, 5)
+        violations3 = alert_pipeline._evaluate_altitude_rules(parsed3, projected3, "AAL123")
+        assert len(violations3) == 0  # 35000ft es seguro
+        
+        # 4. UAL456 bajar a 4000ft (descenso prolongado)
+        parsed4 = ParsedInstruction(
+            raw_text="UAL456 descend to 4000",
+            normalized_text="UAL456 descend to 4000",
+            speaker=Speaker.ATCO,
+            callsign="UAL456",
+            instruction_type=InstructionType.DESCENT,
+            action_verb="descend",
+            parameters={"target_altitude": 4000},
+        )
+        
+        projector4 = StateProjector()
+        projected4 = projector4.create_projection(traffic, parsed4, 5)
+        violations4 = alert_pipeline._evaluate_altitude_rules(parsed4, projected4, "UAL456")
+        
+        # 4000ft < 5000ft MSA, debería detectar violación
+        assert len(violations4) >= 1
+        assert any("MSA" in v.explanation for v in violations4)
+        
+        # 5. AAL123 bajar a 45000ft (subir en realidad)
+        parsed5 = ParsedInstruction(
+            raw_text="AAL123 climb to 45000",
+            normalized_text="AAL123 climb to 45000",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.CLIMB,
+            action_verb="climb",
+            parameters={"target_altitude": 45000},
+        )
+        
+        projector5 = StateProjector()
+        projected5 = projector5.create_projection(traffic, parsed5, 5)
+        violations5 = alert_pipeline._evaluate_altitude_rules(parsed5, projected5, "AAL123")
+        assert len(violations5) == 0  # 45000ft es seguro
+        
+        # 6. AAL123 bajar a 3000ft (violación MSA grave)
+        parsed6 = ParsedInstruction(
+            raw_text="AAL123 descend to 3000",
+            normalized_text="AAL123 descend to 3000",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.DESCENT,
+            action_verb="descend",
+            parameters={"target_altitude": 3000},
+        )
+        
+        projector6 = StateProjector()
+        projected6 = projector6.create_projection(traffic, parsed6, 5)
+        violations6 = alert_pipeline._evaluate_altitude_rules(parsed6, projected6, "AAL123")
+        
+        # Debería detectar violación MSA (3000ft < 5000ft)
+        assert len(violations6) >= 1
+        assert any("MSA" in v.explanation for v in violations6)
+    
+    def test_high_density_traffic_scenario(self, alert_pipeline):
+        """Escenario de alta densidad: 5 aeronaves con múltiples interacciones."""
+        from Alert_System.core.state_projection import StateProjector
+        
+        # Configurar alta densidad de tráfico
+        traffic = TrafficState(sector_id="KJFK", msa=5000)
+        
+        # 5 aeronaves en diferentes altitudes y posiciones
+        traffic.add_aircraft(AircraftState(
+            callsign="AAL123",
+            position=Position(latitude=40.0, longitude=-75.0, altitude=35000, heading=270, speed=450),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        traffic.add_aircraft(AircraftState(
+            callsign="UAL456",
+            position=Position(latitude=40.02, longitude=-75.02, altitude=34000, heading=270, speed=440),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        traffic.add_aircraft(AircraftState(
+            callsign="DAL789",
+            position=Position(latitude=40.04, longitude=-75.04, altitude=33000, heading=270, speed=430),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        traffic.add_aircraft(AircraftState(
+            callsign="JBL555",
+            position=Position(latitude=40.06, longitude=-75.06, altitude=32000, heading=270, speed=420),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        traffic.add_aircraft(AircraftState(
+            callsign="SWA888",
+            position=Position(latitude=40.08, longitude=-75.08, altitude=31000, heading=270, speed=410),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        
+        # Evaluar separación para cada aeronave
+        for callsign in ["AAL123", "UAL456", "DAL789", "JBL555", "SWA888"]:
+            parsed = ParsedInstruction(
+                raw_text=f"{callsign} maintain heading",
+                normalized_text=f"{callsign} maintain heading",
+                speaker=Speaker.ATCO,
+                callsign=callsign,
+                instruction_type=InstructionType.HEADING,
+                action_verb="maintain",
+                parameters={"heading": 270},
+            )
+            
+            projector = StateProjector()
+            projected = projector.create_projection(traffic, parsed, 5)
+            violations = alert_pipeline._evaluate_separation_rules(parsed, projected, callsign)
+            
+            # Verificar que no falla al evaluar separación
+            assert isinstance(violations, list)
+        
+        # Simular instrucción de descenso para la primera aeronave
+        parsed_descend = ParsedInstruction(
+            raw_text="AAL123 descend to 25000",
+            normalized_text="AAL123 descend to 25000",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.DESCENT,
+            action_verb="descend",
+            parameters={"target_altitude": 25000},
+        )
+        
+        projector_descend = StateProjector()
+        projected_descend = projector_descend.create_projection(traffic, parsed_descend, 5)
+        violations_descend = alert_pipeline._evaluate_altitude_rules(parsed_descend, projected_descend, "AAL123")
+        
+        # 25000ft > MSA 5000ft, no debería haber violación
+        assert len(violations_descend) == 0
+    
+    def test_extended_instruction_sequence(self, alert_pipeline):
+        """Escenario: Secuencia extendida de 8+ instrucciones de diferentes tipos."""
+        from Alert_System.core.state_projection import StateProjector
+        
+        # Configurar estado inicial
+        traffic = TrafficState(sector_id="KJFK", msa=5000)
+        
+        # AAL123: crucero a 25000ft
+        traffic.add_aircraft(AircraftState(
+            callsign="AAL123",
+            position=Position(latitude=40.0, longitude=-75.0, altitude=25000, heading=270, speed=350),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        
+        # Secuencia de 8 instrucciones
+        
+        # 1. Cambio de rumbo a 180
+        parsed1 = ParsedInstruction(
+            raw_text="AAL123 turn left heading 180",
+            normalized_text="AAL123 turn left heading 180",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.TURN_LEFT,
+            action_verb="turn",
+            parameters={"heading": 180},
+        )
+        
+        projector1 = StateProjector()
+        projected1 = projector1.create_projection(traffic, parsed1, 5)
+        violations1 = alert_pipeline._evaluate_separation_rules(parsed1, projected1, "AAL123")
+        assert isinstance(violations1, list)
+        
+        # 2. Subir a 30000ft
+        parsed2 = ParsedInstruction(
+            raw_text="AAL123 climb to 30000",
+            normalized_text="AAL123 climb to 30000",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.CLIMB,
+            action_verb="climb",
+            parameters={"target_altitude": 30000},
+        )
+        
+        projector2 = StateProjector()
+        projected2 = projector2.create_projection(traffic, parsed2, 5)
+        violations2 = alert_pipeline._evaluate_altitude_rules(parsed2, projected2, "AAL123")
+        assert len(violations2) == 0  # 30000ft > MSA
+        
+        # 3. Mantener altitud
+        parsed3 = ParsedInstruction(
+            raw_text="AAL123 maintain 30000",
+            normalized_text="AAL123 maintain 30000",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.MAINTAIN_ALTITUDE,
+            action_verb="maintain",
+            parameters={"target_altitude": 30000},
+        )
+        
+        projector3 = StateProjector()
+        projected3 = projector3.create_projection(traffic, parsed3, 5)
+        violations3 = alert_pipeline._evaluate_altitude_rules(parsed3, projected3, "AAL123")
+        assert len(violations3) == 0
+        
+        # 4. Cambio de rumbo a 270
+        parsed4 = ParsedInstruction(
+            raw_text="AAL123 turn right heading 270",
+            normalized_text="AAL123 turn right heading 270",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.TURN_RIGHT,
+            action_verb="turn",
+            parameters={"heading": 270},
+        )
+        
+        projector4 = StateProjector()
+        projected4 = projector4.create_projection(traffic, parsed4, 5)
+        violations4 = alert_pipeline._evaluate_separation_rules(parsed4, projected4, "AAL123")
+        assert isinstance(violations4, list)
+        
+        # 5. Descenso a 20000ft
+        parsed5 = ParsedInstruction(
+            raw_text="AAL123 descend to 20000",
+            normalized_text="AAL123 descend to 20000",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.DESCENT,
+            action_verb="descend",
+            parameters={"target_altitude": 20000},
+        )
+        
+        projector5 = StateProjector()
+        projected5 = projector5.create_projection(traffic, parsed5, 5)
+        violations5 = alert_pipeline._evaluate_altitude_rules(parsed5, projected5, "AAL123")
+        assert len(violations5) == 0  # 20000ft > MSA
+        
+        # 6. Descenso a 10000ft
+        parsed6 = ParsedInstruction(
+            raw_text="AAL123 descend to 10000",
+            normalized_text="AAL123 descend to 10000",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.DESCENT,
+            action_verb="descend",
+            parameters={"target_altitude": 10000},
+        )
+        
+        projector6 = StateProjector()
+        projected6 = projector6.create_projection(traffic, parsed6, 5)
+        violations6 = alert_pipeline._evaluate_altitude_rules(parsed6, projected6, "AAL123")
+        assert len(violations6) == 0  # 10000ft > MSA
+        
+        # 7. Descenso a 4000ft (violación MSA)
+        parsed7 = ParsedInstruction(
+            raw_text="AAL123 descend to 4000",
+            normalized_text="AAL123 descend to 4000",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.DESCENT,
+            action_verb="descend",
+            parameters={"target_altitude": 4000},
+        )
+        
+        projector7 = StateProjector()
+        projected7 = projector7.create_projection(traffic, parsed7, 5)
+        violations7 = alert_pipeline._evaluate_altitude_rules(parsed7, projected7, "AAL123")
+        
+        # Debería detectar violación MSA (4000ft < 5000ft)
+        assert len(violations7) >= 1
+        assert any("MSA" in v.explanation for v in violations7)
+        
+        # 8. Corrección: subir a 6000ft
+        parsed8 = ParsedInstruction(
+            raw_text="AAL123 climb to 6000",
+            normalized_text="AAL123 climb to 6000",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.CLIMB,
+            action_verb="climb",
+            parameters={"target_altitude": 6000},
+        )
+        
+        projector8 = StateProjector()
+        projected8 = projector8.create_projection(traffic, parsed8, 5)
+        violations8 = alert_pipeline._evaluate_altitude_rules(parsed8, projected8, "AAL123")
+        assert len(violations8) == 0  # 6000ft > MSA
+

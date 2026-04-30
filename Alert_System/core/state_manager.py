@@ -34,9 +34,7 @@ class StateTransaction:
 
 class StateManager:
     """
-    Gestiona el estado del tráfico aéreo con soporte para commit/rollback.
-    
-    Implementa el concepto de transacciones de la Propuesta 4:
+    Gestiona el estado del tráfico aéreo con soporte para commit/rollback.    
     - Mantiene el estado actual (real)
     - Permite crear proyecciones (simulaciones)
     - COMMIT: Aplica la proyección al estado real
@@ -85,8 +83,7 @@ class StateManager:
         """
         Propone un cambio al estado basado en una proyección.
         
-        Crea una transacción pendiente que debe ser confirmada (COMMIT)
-        o rechazada (ROLLBACK).
+        Crea una transacción pendiente que debe ser confirmada (COMMIT) o rechazada (ROLLBACK).
         
         Args:
             projected_state: Estado proyectado a aplicar

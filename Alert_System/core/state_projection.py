@@ -171,6 +171,9 @@ class StateProjector:
                 projection_errors=[f"Aircraft {target_callsign} not found"],
             )
         
+        # Guardar altitud original antes de aplicar instrucción
+        original_altitude = target_aircraft.position.altitude
+        
         # Aplicar cambios según el tipo de instrucción
         try:
             self._apply_instruction(target_aircraft, instruction)
@@ -182,11 +185,12 @@ class StateProjector:
                 projection_errors=[f"Error applying instruction: {str(e)}"],
             )
         
-        # Calcular trayectoria proyectada
+        # Calcular trayectoria proyectada (desde altitud original)
         trajectory = self._calculate_trajectory(
             target_aircraft,
             instruction,
             projection_minutes,
+            initial_altitude=original_altitude,
         )
         
         # Calcular separaciones proyectadas
@@ -306,18 +310,25 @@ class StateProjector:
         aircraft: AircraftState,
         instruction: ParsedInstruction,
         minutes: int,
+        initial_altitude: Optional[int] = None,
     ) -> ProjectedTrajectory:
         """
         Calcula la trayectoria proyectada de la aeronave.
         
         Genera waypoints estimados para los próximos minutos.
+        
+        Args:
+            aircraft: Aeronave a proyectar
+            instruction: Instrucción que se está aplicando
+            minutes: Minutos de proyección
+            initial_altitude: Altitud inicial opcional (si no se proporciona, usa la actual)
         """
         waypoints = []
         
-        # Posición inicial
+        # Posición inicial (usar altitud original si se proporciona)
         current_lat = aircraft.position.latitude
         current_lon = aircraft.position.longitude
-        current_alt = aircraft.position.altitude
+        current_alt = initial_altitude if initial_altitude is not None else aircraft.position.altitude
         current_speed = aircraft.position.speed
         heading = aircraft.position.heading
         
@@ -411,12 +422,16 @@ class StateProjector:
                 vertical_sep = abs(waypoint.altitude - other.position.altitude)
                 min_vertical_sep = min(min_vertical_sep, vertical_sep)
                 
-                # Calcular separación horizontal (aproximada)
-                lat_diff = waypoint.latitude - other.position.latitude
-                lon_diff = waypoint.longitude - other.position.longitude
-                lat_nm = lat_diff * 60
-                lon_nm = lon_diff * 60 * math.cos(math.radians(other.position.latitude))
-                horizontal_sep = math.sqrt(lat_nm**2 + lon_nm**2)
+                # Calcular separación horizontal usando TrafficState.calculate_distance
+                # Crear Position temporal para el waypoint
+                waypoint_pos = Position(
+                    latitude=waypoint.latitude,
+                    longitude=waypoint.longitude,
+                    altitude=waypoint.altitude,
+                    heading=0,
+                    speed=0,
+                )
+                horizontal_sep = TrafficState.calculate_distance(waypoint_pos, other.position)
                 min_horizontal_sep = min(min_horizontal_sep, horizontal_sep)
                 
                 # Detectar conflicto (estándar ICAO: 1000ft vertical, 5NM horizontal)

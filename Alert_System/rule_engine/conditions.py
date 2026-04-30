@@ -1,5 +1,6 @@
 """Implementaciones de condiciones evaluables para el motor de reglas."""
 
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -26,6 +27,23 @@ class ConditionEvaluator(ABC):
     
     condition_type: str = ""
     
+    def __init__(self):
+        """Inicializa el evaluador con registro vacío de reglas."""
+        self._rules: List[Dict[str, Any]] = []
+    
+    def add_rule(self, rule: Dict[str, Any]) -> None:
+        """
+        Agrega una regla específica a este evaluador.
+        
+        Args:
+            rule: Diccionario con condition_type y parameters
+        """
+        self._rules.append(rule)
+    
+    def clear_rules(self) -> None:
+        """Limpia todas las reglas registradas."""
+        self._rules.clear()
+    
     @abstractmethod
     def evaluate(
         self,
@@ -43,6 +61,24 @@ class ConditionEvaluator(ABC):
             
         Returns:
             ConditionResult con el resultado de la evaluación
+        """
+        pass
+    
+    @abstractmethod
+    def evaluate_all(
+        self,
+        traffic_state: TrafficState,
+        aircraft_callsign: Optional[str] = None,
+    ) -> List[Violation]:
+        """
+        Evalúa TODAS las reglas registradas contra el estado.
+        
+        Args:
+            traffic_state: Estado actual o proyectado del tráfico
+            aircraft_callsign: Callsign de la aeronave objetivo (si aplica)
+            
+        Returns:
+            Lista de violaciones encontradas
         """
         pass
     
@@ -176,7 +212,7 @@ class AltitudeCondition(ConditionEvaluator):
                     },
                     explanation=(
                         f"CRITICAL: Aircraft {aircraft_callsign} at {current_altitude}ft "
-                        f"is below Minimum Sector Altitude ({msa}ft)"
+                        f"is below MSA ({msa}ft)"
                     ),
                     suggestion=f"CLIMB IMMEDIATELY to {msa}ft or above",
                 )
@@ -188,6 +224,36 @@ class AltitudeCondition(ConditionEvaluator):
             satisfied=False,
             details={"error": f"Unknown check_type: {check_type}"}
         )
+    
+    def evaluate_all(
+        self,
+        traffic_state: TrafficState,
+        aircraft_callsign: Optional[str] = None,
+    ) -> List[Violation]:
+        """
+        Evalúa TODAS las reglas de altitud registradas.
+        
+        Si no hay reglas registradas, usa reglas por defecto (MSA_CHECK).
+        """
+        violations = []
+        
+        # Si no hay reglas registradas, usar reglas por defecto
+        if not self._rules:
+            # Regla por defecto: MSA_CHECK
+            default_rules = [
+                {"condition_type": "ALTITUDE", "parameters": {"check_type": "MSA_CHECK", "rule_id": "MSA_RULE"}}
+            ]
+            rules_to_evaluate = default_rules
+        else:
+            rules_to_evaluate = self._rules
+        
+        for rule in rules_to_evaluate:
+            parameters = rule.get("parameters", {})
+            result = self.evaluate(traffic_state, parameters, aircraft_callsign)
+            if not result.satisfied and result.violation:
+                violations.append(result.violation)
+        
+        return violations
 
 
 class SeparationCondition(ConditionEvaluator):
@@ -342,6 +408,43 @@ class SeparationCondition(ConditionEvaluator):
                 return ConditionResult(satisfied=False, violation=violation)
         
         return ConditionResult(satisfied=True, details={"check": "horizontal_separation_passed"})
+    
+    def evaluate_all(
+        self,
+        traffic_state: TrafficState,
+        aircraft_callsign: Optional[str] = None,
+    ) -> List[Violation]:
+        """
+        Evalúa TODAS las reglas de separación registradas.
+        
+        Si no hay reglas registradas, usa reglas por defecto (separación BOTH).
+        """
+        violations = []
+        
+        # Si no hay reglas registradas, usar reglas por defecto
+        if not self._rules:
+            # Regla por defecto: verificar separación BOTH
+            default_rules = [
+                {
+                    "condition_type": "SEPARATION",
+                    "parameters": {
+                        "separation_type": "BOTH",
+                        "min_distance": 5,
+                        "rule_id": "SEPARATION_RULE"
+                    }
+                }
+            ]
+            rules_to_evaluate = default_rules
+        else:
+            rules_to_evaluate = self._rules
+        
+        for rule in rules_to_evaluate:
+            parameters = rule.get("parameters", {})
+            result = self.evaluate(traffic_state, parameters, aircraft_callsign)
+            if not result.satisfied and result.violation:
+                violations.append(result.violation)
+        
+        return violations
 
 
 class RunwayCondition(ConditionEvaluator):
@@ -440,3 +543,47 @@ class RunwayCondition(ConditionEvaluator):
             satisfied=False,
             details={"error": f"Unknown check_type: {check_type}"}
         )
+
+    def evaluate_all(
+        self,
+        traffic_state: TrafficState,
+        aircraft_callsign: Optional[str] = None,
+    ) -> List[Violation]:
+        """
+        Evalúa TODAS las reglas de pista registradas.
+        
+        Si no hay reglas registradas, verifica todas las pistas disponibles
+        para detectar conflictos de ocupación.
+        """
+        violations = []
+        
+        # Si hay reglas registradas, evaluarlas
+        if self._rules:
+            for rule in self._rules:
+                parameters = rule.get("parameters", {})
+                result = self.evaluate(traffic_state, parameters, aircraft_callsign)
+                if not result.satisfied and result.violation:
+                    violations.append(result.violation)
+        else:
+            # Sin reglas registradas: verificar todas las pistas para conflicto
+            # de ocupación (para aeronaves que solicitan clearance)
+            for runway_id, runway_state in traffic_state.runways.items():
+                if runway_state.occupied and runway_state.occupied_by:
+                    # Solo reportar si la aeronave involucrada no es la ocupante
+                    if aircraft_callsign and runway_state.occupied_by != aircraft_callsign:
+                        from Alert_System.models.alert import AlertSeverity
+                        violation = Violation(
+                            violation_id=f"VIO_{uuid.uuid4().hex[:8]}",
+                            rule_id="RUNWAY_RULE",
+                            condition_type="RUNWAY_AVAILABLE",
+                            severity=AlertSeverity.CRITICAL,
+                            explanation=f"Runway {runway_id} occupied by {runway_state.occupied_by}",
+                            details={
+                                "aircraft_involved": [aircraft_callsign, runway_state.occupied_by],
+                                "runway": runway_id,
+                                "occupied_by": runway_state.occupied_by,
+                            },
+                        )
+                        violations.append(violation)
+        
+        return violations

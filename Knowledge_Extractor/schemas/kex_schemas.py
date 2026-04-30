@@ -82,6 +82,8 @@ class RuleException(BaseModel):
     condition: str = Field(..., description="The specific overriding condition")
 
 class FormalIfThen(BaseModel):
+    model_config = {"populate_by_name": True}
+    
     if_condition: str = Field(..., alias="if", description="Logical string representation of the trigger")
     then_action: str = Field(..., alias="then", description="Logical string representation of the outcome")
     except_when: Optional[str] = Field(None, description="Logical string representation of exceptions")
