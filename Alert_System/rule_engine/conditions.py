@@ -587,3 +587,119 @@ class RunwayCondition(ConditionEvaluator):
                         violations.append(violation)
         
         return violations
+
+
+class GenericKexCondition(ConditionEvaluator):
+    """
+    Evaluador genérico para reglas KEX que no encajan en categorías predefinidas.
+    
+    Este evaluador almacena reglas del KEX en formato ExecutableRule y
+    las evalúa mediante interpretación dinámica contra el estado del tráfico.
+    
+    Es el "catch-all" para reglas arbitrarias extraídas de documentos aeronáuticos.
+    """
+    
+    condition_type = "GENERIC"
+    
+    def __init__(self):
+        """Inicializa el evaluador genérico."""
+        super().__init__()
+        self._executable_rule = None  # Almacena ExecutableRule para evaluación
+        self.condition_id = ""
+    
+    def get_required_parameters(self) -> List[str]:
+        """Parámetros requeridos: la regla ejecutable completa."""
+        return ["executable_rule"]
+    
+    def evaluate(
+        self,
+        traffic_state: TrafficState,
+        parameters: Dict[str, Any],
+        aircraft_callsign: Optional[str] = None,
+    ) -> ConditionResult:
+        """
+        Evalúa una regla genérica contra el estado del tráfico.
+        
+        Por ahora, este método implementa evaluación básica usando keywords.
+        En el futuro, puede usar LLM para interpretación más sofisticada.
+        
+        Args:
+            traffic_state: Estado actual del tráfico
+            parameters: Parámetros de la regla (incluyendo executable_rule)
+            aircraft_callsign: Callsign de la aeronave a evaluar
+            
+        Returns:
+            ConditionResult indicando si se cumple la condición
+        """
+        # Obtener la regla ejecutable
+        executable = parameters.get("executable_rule") or self._executable_rule
+        
+        if not executable:
+            return ConditionResult(
+                satisfied=False,
+                violation=None,
+                details={"error": "No executable rule provided"}
+            )
+        
+        # Evaluación básica por keywords (placeholder para evaluación más sofisticada)
+        condition_desc = executable.condition_description or ""
+        condition_lower = condition_desc.lower()
+        
+        # Verificar si la regla menciona conceptos que podemos evaluar
+        if "altitude" in condition_lower or "below" in condition_lower:
+            # Delegar a evaluación de altitud si hay aeronave
+            if aircraft_callsign:
+                aircraft = traffic_state.traffic_state.get_aircraft(aircraft_callsign)
+                if aircraft and traffic_state.traffic_state.msa:
+                    if aircraft.position.altitude < traffic_state.traffic_state.msa:
+                        violation = Violation(
+                            violation_id=f"VIO_{uuid.uuid4().hex[:8]}",
+                            rule_id=executable.source_rule_id,
+                            condition_type="GENERIC_MSA_VIOLATION",
+                            severity=AlertSeverity.HIGH,
+                            explanation=f"Generic rule violation: {condition_desc}",
+                            details={
+                                "rule_category": executable.rule_category,
+                                "aircraft": aircraft_callsign,
+                                "altitude": aircraft.position.altitude,
+                                "msa": traffic_state.traffic_state.msa,
+                            },
+                        )
+                        return ConditionResult(satisfied=False, violation=violation)
+        
+        # Por defecto: condición satisfecha (no se detectó violación)
+        return ConditionResult(
+            satisfied=True,
+            details={"check": "generic_rule_evaluated", "rule_id": executable.source_rule_id}
+        )
+    
+    def evaluate_all(
+        self,
+        traffic_state: TrafficState,
+        aircraft_callsign: Optional[str] = None,
+    ) -> List[Violation]:
+        """
+        Evalúa todas las reglas genéricas registradas.
+        
+        Para GenericKexCondition, típicamente hay una sola regla
+        almacenada en _executable_rule.
+        """
+        violations = []
+        
+        if self._executable_rule:
+            result = self.evaluate(
+                traffic_state=traffic_state,
+                parameters={},
+                aircraft_callsign=aircraft_callsign
+            )
+            if not result.satisfied and result.violation:
+                violations.append(result.violation)
+        
+        # También evaluar reglas registradas vía add_rule
+        for rule in self._rules:
+            parameters = rule.get("parameters", {})
+            result = self.evaluate(traffic_state, parameters, aircraft_callsign)
+            if not result.satisfied and result.violation:
+                violations.append(result.violation)
+        
+        return violations

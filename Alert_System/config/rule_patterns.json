@@ -1,0 +1,92 @@
+{
+  "version": "1.0",
+  "description": "Patrones de mapeo de reglas KEX a categorias ejecutables",
+  "patterns": [
+    {
+      "name": "ALTITUDE_MINIMUM",
+      "category": "ALTITUDE",
+      "keywords": ["altitude", "below", "less than", "minimum altitude", "msa", "minimum sector altitude"],
+      "required_state_fields": ["aircraft.position.altitude", "traffic_state.msa"],
+      "extract_params": ["altitude_value"]
+    },
+    {
+      "name": "ALTITUDE_MAXIMUM",
+      "category": "ALTITUDE",
+      "keywords": ["altitude", "above", "greater than", "maximum altitude"],
+      "required_state_fields": ["aircraft.position.altitude"],
+      "extract_params": ["altitude_value"]
+    },
+    {
+      "name": "FLIGHT_LEVEL_RESTRICTION",
+      "category": "ALTITUDE",
+      "keywords": ["flight level", "fl", "level"],
+      "required_state_fields": ["aircraft.position.altitude"],
+      "extract_params": ["flight_level"]
+    },
+    {
+      "name": "VERTICAL_SEPARATION",
+      "category": "SEPARATION",
+      "keywords": ["vertical separation", "separation", "1000 feet", "rvsm"],
+      "required_state_fields": ["aircraft.position.altitude", "projected_separations"],
+      "extract_params": ["min_vertical"]
+    },
+    {
+      "name": "HORIZONTAL_SEPARATION",
+      "category": "SEPARATION",
+      "keywords": ["horizontal separation", "distance", "nm separation", "5 nm", "3 nm"],
+      "required_state_fields": ["aircraft.position", "projected_separations"],
+      "extract_params": ["min_horizontal"]
+    },
+    {
+      "name": "RUNWAY_OCCUPIED",
+      "category": "RUNWAY",
+      "keywords": ["runway occupied", "runway closed", "runway not available"],
+      "required_state_fields": ["runways"],
+      "extract_params": ["runway_id"]
+    },
+    {
+      "name": "RUNWAY_AVAILABLE",
+      "category": "RUNWAY",
+      "keywords": ["runway available", "runway clear", "landing clearance", "takeoff clearance"],
+      "required_state_fields": ["runways"],
+      "extract_params": ["runway_id"]
+    },
+    {
+      "name": "TAXI_CLEARANCE_LIMIT",
+      "category": "RUNWAY",
+      "keywords": ["taxi clearance", "clearance limit", "holding point"],
+      "required_state_fields": ["aircraft.position", "runways"],
+      "extract_params": ["holding_point", "runway_id"]
+    },
+    {
+      "name": "SPEED_RESTRICTION",
+      "category": "GENERIC",
+      "keywords": ["speed", "knots", "ias", "mach", "velocity"],
+      "required_state_fields": ["aircraft.position.speed"],
+      "extract_params": ["speed_value", "speed_unit"]
+    },
+    {
+      "name": "HEADING_RESTRICTION",
+      "category": "GENERIC",
+      "keywords": ["heading", "course", "turn left", "turn right"],
+      "required_state_fields": ["aircraft.position.heading"],
+      "extract_params": ["heading_value"]
+    },
+    {
+      "name": "WEATHER_MINIMUMS",
+      "category": "UNEVALUABLE",
+      "keywords": ["visibility", "weather", "ceiling", "cloud", "wind", "metar"],
+      "required_state_fields": [],
+      "extract_params": [],
+      "reason": "Requiere datos meteorologicos externos no disponibles en TrafficState"
+    },
+    {
+      "name": "CREW_FATIGUE",
+      "category": "UNEVALUABLE",
+      "keywords": ["pilot", "crew", "fatigue", "duty time", "rest"],
+      "required_state_fields": [],
+      "extract_params": [],
+      "reason": "Requiere informacion de operaciones de tripulacion no disponible"
+    }
+  ]
+}

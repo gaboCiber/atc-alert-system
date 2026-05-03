@@ -1371,3 +1371,303 @@ class TestEndToEndScenarios:
         violations8 = alert_pipeline._evaluate_altitude_rules(parsed8, projected8, "AAL123")
         assert len(violations8) == 0  # 6000ft > MSA
 
+
+class TestKEXAdapterHybrid:
+    """Tests para la integracion hibrida KEX-RuleEngine con reglas genericas."""
+    
+    def test_executable_rule_creation(self):
+        """Test que ExecutableRule se crea correctamente."""
+        from Alert_System.integration.schemas import ExecutableRule
+        
+        rule = ExecutableRule(
+            source_rule_id="RULE_TEST_001",
+            rule_category="ALTITUDE",
+            parameters={"min_altitude": 5000},
+            condition_description="If altitude < 5000ft",
+            required_state_fields=["aircraft.position.altitude"],
+            severity="HIGH",
+            safety_critical=True,
+        )
+        
+        assert rule.source_rule_id == "RULE_TEST_001"
+        assert rule.rule_category == "ALTITUDE"
+        assert rule.parameters["min_altitude"] == 5000
+        assert rule.safety_critical is True
+        assert rule.reason_unexecutable is None
+    
+    def test_executable_rule_generic(self):
+        """Test que ExecutableRule para reglas genericas almacena descripcion."""
+        from Alert_System.integration.schemas import ExecutableRule
+        
+        rule = ExecutableRule(
+            source_rule_id="RULE_TEST_GENERIC",
+            rule_category="GENERIC",
+            condition_description="If visibility < 1km, no approach",
+            required_state_fields=["weather.visibility"],
+        )
+        
+        assert rule.rule_category == "GENERIC"
+        assert rule.parameters is None
+        assert "visibility" in rule.condition_description
+    
+    def test_executable_rule_unevaluable(self):
+        """Test que reglas no evaluables se marcan correctamente."""
+        from Alert_System.integration.schemas import ExecutableRule
+        
+        rule = ExecutableRule(
+            source_rule_id="RULE_TEST_UNEVAL",
+            rule_category="UNEVALUABLE",
+            reason_unexecutable="Requiere juicio humano",
+        )
+        
+        assert rule.rule_category == "UNEVALUABLE"
+        assert rule.reason_unexecutable is not None
+    
+    def test_kex_adapter_loads_patterns(self):
+        """Test que KEXAdapter carga patrones desde JSON."""
+        from Alert_System.integration.kex_adapter import KEXAdapter
+        
+        adapter = KEXAdapter()
+        assert len(adapter._rule_patterns) > 0
+        assert "ALTITUDE_MINIMUM" in adapter._rule_patterns
+        assert "WEATHER_MINIMUMS" in adapter._rule_patterns
+    
+    def test_generic_kex_condition_creation(self):
+        """Test que GenericKexCondition se puede crear."""
+        from Alert_System.rule_engine.conditions import GenericKexCondition
+        
+        condition = GenericKexCondition()
+        assert condition.condition_type == "GENERIC"
+        assert condition._executable_rule is None
+        assert condition._rules == []
+    
+    def test_generic_kex_condition_evaluate_with_no_rule(self):
+        """Test que GenericKexCondition reporta error si no hay regla."""
+        from Alert_System.rule_engine.conditions import GenericKexCondition
+        from Alert_System.core.state_projection import ProjectedState
+        from Alert_System.models.instruction import ParsedInstruction, InstructionType, Speaker
+        
+        traffic = TrafficState(sector_id="KJFK", msa=5000)
+        traffic.add_aircraft(AircraftState(
+            callsign="AAL123",
+            position=Position(latitude=40.0, longitude=-75.0, altitude=25000, heading=270, speed=350),
+            flight_phase=FlightPhase.CRUISE,
+        ))
+        
+        condition = GenericKexCondition()
+        
+        # Crear instruccion dummy para ProjectedState
+        dummy_instruction = ParsedInstruction(
+            raw_text="test",
+            normalized_text="test",
+            speaker=Speaker.ATCO,
+            callsign="AAL123",
+            instruction_type=InstructionType.MAINTAIN_ALTITUDE,
+            action_verb="maintain",
+            parameters={},
+        )
+        
+        projected = ProjectedState(
+            traffic_state=traffic,
+            source_instruction=dummy_instruction,
+            trajectories={},
+            projected_separations={},
+            is_valid_projection=True,
+        )
+        
+        result = condition.evaluate(projected, {}, "AAL123")
+        assert result.satisfied is False
+        assert result.details.get("error") == "No executable rule provided"
+    
+    def test_generic_kex_condition_with_msa_violation(self):
+        """Test que GenericKexCondition detecta violacion MSA basica."""
+        from Alert_System.rule_engine.conditions import GenericKexCondition
+        from Alert_System.integration.schemas import ExecutableRule
+        from Alert_System.core.state_projection import ProjectedState
+        from Alert_System.models.instruction import ParsedInstruction, InstructionType, Speaker
+        
+        traffic = TrafficState(sector_id="KJFK", msa=5000)
+        traffic.add_aircraft(AircraftState(
+            callsign="UAL456",
+            position=Position(latitude=40.0, longitude=-75.0, altitude=3000, heading=270, speed=350),
+            flight_phase=FlightPhase.APPROACH,
+        ))
+        
+        # Crear regla generica que menciona altitud
+        executable = ExecutableRule(
+            source_rule_id="RULE_ALT_GENERIC",
+            rule_category="GENERIC",
+            condition_description="If aircraft below minimum altitude",
+            required_state_fields=["aircraft.position.altitude"],
+        )
+        
+        condition = GenericKexCondition()
+        condition._executable_rule = executable
+        
+        # Crear instruccion dummy para ProjectedState
+        dummy_instruction = ParsedInstruction(
+            raw_text="test",
+            normalized_text="test",
+            speaker=Speaker.ATCO,
+            callsign="UAL456",
+            instruction_type=InstructionType.MAINTAIN_ALTITUDE,
+            action_verb="maintain",
+            parameters={},
+        )
+        
+        projected = ProjectedState(
+            traffic_state=traffic,
+            source_instruction=dummy_instruction,
+            trajectories={},
+            projected_separations={},
+            is_valid_projection=True,
+        )
+        
+        result = condition.evaluate(projected, {}, "UAL456")
+        assert result.satisfied is False
+        assert result.violation is not None
+        assert result.violation.condition_type == "GENERIC_MSA_VIOLATION"
+        assert result.violation.rule_id == "RULE_ALT_GENERIC"
+    
+    def test_kex_adapter_categorize_altitude(self):
+        """Test que KEXAdapter categoriza reglas de altitud correctamente."""
+        from Alert_System.integration.kex_adapter import KEXAdapter
+        
+        adapter = KEXAdapter()
+        
+        # Simular regla KEX de altitud (usando dict como mock)
+        mock_rule = type("MockRule", (), {
+            "trigger": type("Trigger", (), {"description": "Aircraft below minimum altitude"})(),
+            "formal_if_then": type("Formal", (), {
+                "if_condition": "altitude < 5000",
+                "then_action": "must_climb"
+            })(),
+            "id": "RULE_ALT_001",
+        })()
+        
+        category = adapter._categorize_rule(mock_rule)
+        assert category == "ALTITUDE"
+    
+    def test_kex_adapter_categorize_unevaluable(self):
+        """Test que KEXAdapter detecta reglas no evaluables."""
+        from Alert_System.integration.kex_adapter import KEXAdapter
+        
+        adapter = KEXAdapter()
+        
+        mock_rule = type("MockRule", (), {
+            "trigger": type("Trigger", (), {"description": "Pilot fatigue detected"})(),
+            "formal_if_then": type("Formal", (), {
+                "if_condition": "crew fatigue",
+                "then_action": "requires judgment"
+            })(),
+            "id": "RULE_FATIGUE_001",
+        })()
+        
+        category = adapter._categorize_rule(mock_rule)
+        assert category == "UNEVALUABLE"
+    
+    def test_kex_adapter_uses_json_patterns(self):
+        """Test que KEXAdapter usa patrones del JSON para categorizar."""
+        from Alert_System.integration.kex_adapter import KEXAdapter
+        
+        adapter = KEXAdapter()
+        
+        # Verificar que patrones específicos del JSON funcionan
+        # WEATHER_MINIMUMS tiene keywords: ["visibility", "weather", "ceiling", "cloud", "wind", "metar"]
+        mock_weather_rule = type("MockRule", (), {
+            "trigger": type("Trigger", (), {"description": "Low visibility approach"})(),
+            "formal_if_then": type("Formal", (), {
+                "if_condition": "visibility < 1km",
+                "then_action": "do not approach"
+            })(),
+            "id": "RULE_WEATHER_001",
+        })()
+        
+        category = adapter._categorize_rule(mock_weather_rule)
+        assert category == "UNEVALUABLE"  # WEATHER_MINIMUMS category
+        
+        # SPEED_RESTRICTION tiene keywords: ["speed", "knots", "ias", "mach", "velocity"]
+        mock_speed_rule = type("MockRule", (), {
+            "trigger": type("Trigger", (), {"description": "Speed limit"})(),
+            "formal_if_then": type("Formal", (), {
+                "if_condition": "speed > 250 knots",
+                "then_action": "reduce speed"
+            })(),
+            "id": "RULE_SPEED_001",
+        })()
+        
+        category = adapter._categorize_rule(mock_speed_rule)
+        assert category == "GENERIC"  # SPEED_RESTRICTION category
+    
+    def test_full_hybrid_flow_known_rule(self):
+        """Test del flujo completo: regla conocida → ExecutableRule → Evaluator."""
+        from Alert_System.integration.kex_adapter import KEXAdapter
+        from Alert_System.rule_engine.conditions import AltitudeCondition
+        
+        adapter = KEXAdapter()
+        
+        mock_rule = type("MockRule", (), {
+            "trigger": type("Trigger", (), {"description": "Aircraft below MSA"})(),
+            "formal_if_then": type("Formal", (), {
+                "if_condition": "altitude < msa",
+                "then_action": "must_climb"
+            })(),
+            "id": "RULE_MSA_001",
+            "severity": "CRITICAL",
+            "safety_critical": True,
+        })()
+        
+        executable = adapter.compile_to_executable(mock_rule)
+        assert executable.rule_category == "ALTITUDE"
+        assert executable.source_rule_id == "RULE_MSA_001"
+        
+        evaluator = adapter._adapt_executable_rule(executable)
+        assert evaluator is not None
+        assert isinstance(evaluator, AltitudeCondition)
+    
+    def test_full_hybrid_flow_generic_rule(self):
+        """Test del flujo completo: regla generica → ExecutableRule → GenericKexCondition."""
+        from Alert_System.integration.kex_adapter import KEXAdapter
+        from Alert_System.rule_engine.conditions import GenericKexCondition
+        
+        adapter = KEXAdapter()
+        
+        mock_rule = type("MockRule", (), {
+            "trigger": type("Trigger", (), {"description": "New speed restriction"})(),
+            "formal_if_then": type("Formal", (), {
+                "if_condition": "speed > 250",
+                "then_action": "reduce_speed"
+            })(),
+            "id": "RULE_SPEED_001",
+            "severity": "MEDIUM",
+            "safety_critical": False,
+        })()
+        
+        executable = adapter.compile_to_executable(mock_rule)
+        assert executable.rule_category == "GENERIC"
+        assert "speed" in executable.condition_description.lower()
+        
+        evaluator = adapter._adapt_executable_rule(executable)
+        assert evaluator is not None
+        assert isinstance(evaluator, GenericKexCondition)
+    
+    def test_full_hybrid_flow_unevaluable_rule(self):
+        """Test del flujo completo: regla no evaluable → None (ignorada)."""
+        from Alert_System.integration.kex_adapter import KEXAdapter
+        
+        adapter = KEXAdapter()
+        
+        mock_rule = type("MockRule", (), {
+            "trigger": type("Trigger", (), {"description": "Weather conditions"})(),
+            "formal_if_then": type("Formal", (), {
+                "if_condition": "visibility low",
+                "then_action": "use_discretion"
+            })(),
+            "id": "RULE_WEATHER_001",
+        })()
+        
+        executable = adapter.compile_to_executable(mock_rule)
+        assert executable.rule_category == "UNEVALUABLE"
+        
+        evaluator = adapter._adapt_executable_rule(executable)
+        assert evaluator is None  # No se crea evaluador
