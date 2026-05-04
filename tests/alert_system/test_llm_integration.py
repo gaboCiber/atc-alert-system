@@ -15,12 +15,17 @@ pytestmark = pytest.mark.slow
 
 
 @pytest.fixture
-def ollama_config():
-    """Configuración para Ollama con llama3.2."""
+def ollama_config(request):
+    """Configuración para Ollama con modelo parametrizable."""
     from common.llm_client_factory import ModelConfig
     
+    # Obtener el modelo del parámetro CLI o usar default
+    model_name = request.config.getoption("--model", default="llama3.2:latest")
+    
+    print(f"🧠 Usando modelo: {model_name}")
+    
     return ModelConfig(
-        name="smollm2:360m",
+        name=model_name,
         provider="ollama",
         base_url="http://localhost:11434",
         api_key="ollama",  # Ollama no necesita API key real

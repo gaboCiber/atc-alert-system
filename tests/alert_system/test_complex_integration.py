@@ -70,12 +70,17 @@ def complex_traffic_state():
 
 
 @pytest.fixture
-def ollama_config():
-    """Configuración para Ollama con llama3.2."""
+def ollama_config(request):
+    """Configuración para Ollama con modelo parametrizable."""
     from common.llm_client_factory import ModelConfig
     
+    # Obtener el modelo del parámetro CLI o usar default
+    model_name = request.config.getoption("--model", default="llama3.2:latest")
+    
+    print(f"🧠 Test complejo usando modelo: {model_name}")
+    
     return ModelConfig(
-        name="llama3.2:latest",
+        name=model_name,
         provider="ollama",
         base_url="http://localhost:11434",
         api_key="ollama",
