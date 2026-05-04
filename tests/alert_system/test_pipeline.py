@@ -1599,6 +1599,171 @@ class TestKEXAdapterHybrid:
         category = adapter._categorize_rule(mock_speed_rule)
         assert category == "GENERIC"  # SPEED_RESTRICTION category
     
+    def test_generic_kex_condition_llm_evaluation(self):
+        """Test GenericKexCondition with LLM evaluation (mocked)."""
+        from Alert_System.rule_engine.conditions import GenericKexCondition
+        from Alert_System.integration.schemas import ExecutableRule, LLMEvaluationResult
+        from Alert_System.models.traffic_state import TrafficState, AircraftState, Position, FlightPhase
+        from Alert_System.models import AlertSeverity
+        from unittest.mock import Mock, patch
+        import uuid
+        
+        # Create mock LLM config
+        mock_config = Mock()
+        mock_config.name = "test-model"
+        mock_config.max_retries = 3
+        
+        # Create GenericKexCondition with LLM config
+        condition = GenericKexCondition(llm_config=mock_config)
+        
+        # Create mock executable rule
+        executable_rule = ExecutableRule(
+            source_rule_id="RULE_TEST_001",
+            rule_category="GENERIC",
+            condition_description="Aircraft must maintain minimum altitude of 5000ft",
+            raw_trigger="Minimum altitude",
+            raw_constraint="altitude >= 5000"
+        )
+        
+        # Create mock traffic state
+        traffic_state = TrafficState(sector_id="TEST_SECTOR")
+        traffic_state.msa = 3000  # Below rule minimum
+        
+        aircraft = AircraftState(
+            callsign="TEST123",
+            position=Position(latitude=40.0, longitude=-3.0, altitude=4000, speed=250, heading=180),
+            flight_phase=FlightPhase.CRUISE
+        )
+        traffic_state.aircrafts["TEST123"] = aircraft
+        
+        # Mock LLM client response
+        mock_llm_result = LLMEvaluationResult(
+            is_violated=True,
+            confidence=0.9,
+            explanation="Aircraft at 4000ft is below required 5000ft minimum",
+            suggested_action="Climb to 5000ft immediately",
+            severity_override="HIGH",
+            extracted_values={"altitude": 4000, "required": 5000}
+        )
+        
+        # Mock instructor client
+        mock_client = Mock()
+        mock_client.chat.completions.create.return_value = mock_llm_result
+        
+        # Patch the client initialization
+        with patch.object(condition, '_instructor_client', mock_client):
+            result = condition.evaluate(
+                traffic_state=traffic_state,
+                parameters={"executable_rule": executable_rule},
+                aircraft_callsign="TEST123"
+            )
+        
+        # Verify LLM was called
+        mock_client.chat.completions.create.assert_called_once()
+        
+        # Verify violation detected
+        assert not result.satisfied
+        assert result.violation is not None
+        assert result.violation.rule_id == "RULE_TEST_001"
+        assert result.violation.condition_type == "GENERIC_LLM_VIOLATION"
+        assert result.violation.severity == AlertSeverity.HIGH
+        assert "4000ft is below required 5000ft" in result.violation.explanation
+        assert result.violation.details["llm_confidence"] == 0.9
+        assert result.violation.details["suggested_action"] == "Climb to 5000ft immediately"
+    
+    def test_generic_kex_condition_llm_fallback_to_keywords(self):
+        """Test GenericKexCondition falls back to keywords when LLM fails."""
+        from Alert_System.rule_engine.conditions import GenericKexCondition
+        from Alert_System.integration.schemas import ExecutableRule
+        from Alert_System.models.traffic_state import TrafficState, AircraftState, Position, FlightPhase
+        from unittest.mock import Mock, patch
+        
+        # Create GenericKexCondition with LLM config
+        mock_config = Mock()
+        condition = GenericKexCondition(llm_config=mock_config)
+        
+        # Create mock executable rule (altitude-related)
+        executable_rule = ExecutableRule(
+            source_rule_id="RULE_ALT_001",
+            rule_category="GENERIC",
+            condition_description="Aircraft below minimum sector altitude",
+            raw_trigger="Below MSA",
+            raw_constraint="altitude < msa"
+        )
+        
+        # Create mock traffic state with violation
+        traffic_state = TrafficState(sector_id="TEST_SECTOR")
+        traffic_state.msa = 5000
+        
+        aircraft = AircraftState(
+            callsign="TEST123",
+            position=Position(latitude=40.0, longitude=-3.0, altitude=4000, speed=250, heading=180),
+            flight_phase=FlightPhase.CRUISE
+        )
+        traffic_state.aircrafts["TEST123"] = aircraft
+        
+        # Mock LLM client to raise exception
+        mock_client = Mock()
+        mock_client.chat.completions.create.side_effect = Exception("LLM failed")
+        
+        # Patch client initialization and test
+        with patch.object(condition, '_instructor_client', mock_client):
+            result = condition.evaluate(
+                traffic_state=traffic_state,
+                parameters={"executable_rule": executable_rule},
+                aircraft_callsign="TEST123"
+            )
+        
+        # Verify fallback detected violation via keywords
+        assert not result.satisfied
+        assert result.violation is not None
+        assert result.violation.rule_id == "RULE_ALT_001"
+        assert result.violation.condition_type == "GENERIC_MSA_VIOLATION"
+        assert result.violation.severity == AlertSeverity.HIGH
+        assert "Generic rule violation" in result.violation.explanation
+    
+    def test_generic_kex_condition_no_llm_config(self):
+        """Test GenericKexCondition works without LLM config (keywords only)."""
+        from Alert_System.rule_engine.conditions import GenericKexCondition
+        from Alert_System.integration.schemas import ExecutableRule
+        from Alert_System.models.traffic_state import TrafficState, AircraftState, Position, FlightPhase
+        
+        # Create GenericKexCondition without LLM config
+        condition = GenericKexCondition(llm_config=None)
+        
+        # Create mock executable rule
+        executable_rule = ExecutableRule(
+            source_rule_id="RULE_TEST_001",
+            rule_category="GENERIC",
+            condition_description="Aircraft must maintain safe separation",
+            raw_trigger="Separation",
+            raw_constraint="distance > 3nm"
+        )
+        
+        # Create mock traffic state
+        traffic_state = TrafficState(sector_id="TEST_SECTOR")
+        traffic_state.msa = 3000
+        
+        aircraft = AircraftState(
+            callsign="TEST123",
+            position=Position(latitude=40.0, longitude=-3.0, altitude=6000, speed=250, heading=180),
+            flight_phase=FlightPhase.CRUISE
+        )
+        traffic_state.aircrafts["TEST123"] = aircraft
+        
+        # Evaluate without LLM (should use keywords)
+        result = condition.evaluate(
+            traffic_state=traffic_state,
+            parameters={"executable_rule": executable_rule},
+            aircraft_callsign="TEST123"
+        )
+        
+        # Should be satisfied (no keywords matched)
+        assert result.satisfied
+        assert result.violation is None
+        assert result.details["check"] == "keyword_evaluation"
+        assert result.details["rule_id"] == "RULE_TEST_001"
+    
     def test_full_hybrid_flow_known_rule(self):
         """Test del flujo completo: regla conocida → ExecutableRule → Evaluator."""
         from Alert_System.integration.kex_adapter import KEXAdapter

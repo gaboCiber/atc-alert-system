@@ -3,10 +3,10 @@
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
-
-from Alert_System.models.alert import AlertSeverity, Violation
-from Alert_System.models.traffic_state import AircraftState, RunwayState, TrafficState
+from typing import Dict, Any, Optional, List, Union, Tuple
+from uuid import uuid4
+from pydantic import BaseModel
+from ..models import TrafficState, AlertSeverity, AircraftState, RunwayState, Violation
 
 
 @dataclass
@@ -601,30 +601,49 @@ class GenericKexCondition(ConditionEvaluator):
     
     condition_type = "GENERIC"
     
-    def __init__(self):
-        """Inicializa el evaluador genérico."""
+    def __init__(self, llm_config: Optional[Any] = None):
+        """Inicializa el evaluador genérico.
+        
+        Args:
+            llm_config: Configuración para evaluación LLM. Si None, solo usa keywords.
+        """
         super().__init__()
         self._executable_rule = None  # Almacena ExecutableRule para evaluación
         self.condition_id = ""
+        self.llm_config = llm_config
+        self._instructor_client = None  # Lazy initialization
+        self._raw_client = None
     
     def get_required_parameters(self) -> List[str]:
         """Parámetros requeridos: la regla ejecutable completa."""
         return ["executable_rule"]
     
+    def _initialize_clients(self):
+        """Initialize LLM clients lazily when needed."""
+        if self.llm_config and not self._instructor_client:
+            try:
+                # Lazy imports to avoid circular dependency
+                from common.llm_client_factory import create_instructor_client, create_raw_client
+                self._instructor_client, _ = create_instructor_client(self.llm_config)
+                self._raw_client = create_raw_client(self.llm_config)
+            except Exception as e:
+                # Log error but continue with keyword fallback
+                print(f"Warning: Failed to initialize LLM clients: {e}")
+                self.llm_config = None  # Disable LLM for this instance
+    
     def evaluate(
         self,
-        traffic_state: TrafficState,
+        traffic_state: Any,  # TrafficState or ProjectedState
         parameters: Dict[str, Any],
         aircraft_callsign: Optional[str] = None,
     ) -> ConditionResult:
         """
         Evalúa una regla genérica contra el estado del tráfico.
         
-        Por ahora, este método implementa evaluación básica usando keywords.
-        En el futuro, puede usar LLM para interpretación más sofisticada.
+        Intenta evaluación LLM primero si está disponible, con fallback a keywords.
         
         Args:
-            traffic_state: Estado actual del tráfico
+            traffic_state: Estado actual del tráfico (TrafficState o ProjectedState)
             parameters: Parámetros de la regla (incluyendo executable_rule)
             aircraft_callsign: Callsign de la aeronave a evaluar
             
@@ -641,17 +660,130 @@ class GenericKexCondition(ConditionEvaluator):
                 details={"error": "No executable rule provided"}
             )
         
-        # Evaluación básica por keywords (placeholder para evaluación más sofisticada)
+        # Intentar evaluación LLM primero si está disponible
+        if self.llm_config:
+            self._initialize_clients()
+            if self._instructor_client:
+                try:
+                    return self._evaluate_with_llm(executable, traffic_state, aircraft_callsign)
+                except Exception as e:
+                    # Log error and fallback to keywords
+                    print(f"Warning: LLM evaluation failed: {e}, falling back to keywords")
+        
+        # Fallback: evaluación por keywords
+        return self._evaluate_with_keywords(executable, traffic_state, aircraft_callsign)
+    
+    def _evaluate_with_llm(
+        self,
+        executable: Any,  # ExecutableRule from integration.schemas
+        traffic_state: Any,  # TrafficState or ProjectedState
+        aircraft_callsign: Optional[str] = None,
+    ) -> ConditionResult:
+        """Evaluate rule using LLM with structured output."""
+        # Lazy imports to avoid circular dependency
+        from ..integration.schemas import LLMEvaluationResult
+        from ..config.evaluation_prompts import build_evaluation_prompt
+        
+        # Handle both TrafficState and ProjectedState
+        if hasattr(traffic_state, 'traffic_state'):
+            # It's a ProjectedState
+            actual_state = traffic_state.traffic_state
+        else:
+            # It's a TrafficState
+            actual_state = traffic_state
+        
+        # Build traffic state summary
+        traffic_summary = self._build_traffic_state_summary(actual_state, aircraft_callsign)
+        
+        # Build prompts
+        system_prompt, user_prompt = build_evaluation_prompt(
+            rule_id=executable.source_rule_id,
+            rule_category=executable.rule_category,
+            rule_description=executable.condition_description or "",
+            raw_rule_text=f"{executable.raw_trigger or ''} {executable.raw_constraint or ''}",
+            traffic_state_summary=traffic_summary["traffic"],
+            aircraft_summary=traffic_summary["aircraft"],
+            msa_value=str(actual_state.msa or "N/A"),
+            runway_status=traffic_summary["runways"],
+            separation_summary=traffic_summary["separations"],
+        )
+        
+        # Call LLM with structured output
+        response = self._instructor_client.chat.completions.create(
+            model=self.llm_config.name,
+            response_model=LLMEvaluationResult,
+            max_retries=self.llm_config.max_retries,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        
+        # Convert LLM result to ConditionResult
+        if response.is_violated and response.confidence > 0.5:
+            # Determine severity
+            severity = AlertSeverity.MEDIUM
+            if response.severity_override:
+                severity_map = {
+                    "LOW": AlertSeverity.LOW,
+                    "MEDIUM": AlertSeverity.MEDIUM,
+                    "HIGH": AlertSeverity.HIGH,
+                    "CRITICAL": AlertSeverity.CRITICAL,
+                }
+                severity = severity_map.get(response.severity_override, AlertSeverity.MEDIUM)
+            
+            violation = Violation(
+                violation_id=f"VIO_{uuid.uuid4().hex[:8]}",
+                rule_id=executable.source_rule_id,
+                condition_type="GENERIC_LLM_VIOLATION",
+                severity=severity,
+                explanation=response.explanation,
+                details={
+                    "rule_category": executable.rule_category,
+                    "llm_confidence": response.confidence,
+                    "suggested_action": response.suggested_action,
+                    "extracted_values": response.extracted_values,
+                    "aircraft": aircraft_callsign,
+                },
+            )
+            return ConditionResult(satisfied=False, violation=violation)
+        
+        # No violation detected
+        return ConditionResult(
+            satisfied=True,
+            details={
+                "check": "llm_evaluation",
+                "rule_id": executable.source_rule_id,
+                "confidence": response.confidence,
+                "explanation": response.explanation,
+            }
+        )
+    
+    def _evaluate_with_keywords(
+        self,
+        executable: Any,  # ExecutableRule from integration.schemas
+        traffic_state: Any,  # TrafficState or ProjectedState
+        aircraft_callsign: Optional[str] = None,
+    ) -> ConditionResult:
+        """Fallback evaluation using keyword matching."""
         condition_desc = executable.condition_description or ""
         condition_lower = condition_desc.lower()
+        
+        # Handle both TrafficState and ProjectedState
+        if hasattr(traffic_state, 'traffic_state'):
+            # It's a ProjectedState
+            actual_state = traffic_state.traffic_state
+        else:
+            # It's a TrafficState
+            actual_state = traffic_state
         
         # Verificar si la regla menciona conceptos que podemos evaluar
         if "altitude" in condition_lower or "below" in condition_lower:
             # Delegar a evaluación de altitud si hay aeronave
             if aircraft_callsign:
-                aircraft = traffic_state.traffic_state.get_aircraft(aircraft_callsign)
-                if aircraft and traffic_state.traffic_state.msa:
-                    if aircraft.position.altitude < traffic_state.traffic_state.msa:
+                aircraft = actual_state.get_aircraft(aircraft_callsign)
+                if aircraft and actual_state.msa:
+                    if aircraft.position.altitude < actual_state.msa:
                         violation = Violation(
                             violation_id=f"VIO_{uuid.uuid4().hex[:8]}",
                             rule_id=executable.source_rule_id,
@@ -662,7 +794,7 @@ class GenericKexCondition(ConditionEvaluator):
                                 "rule_category": executable.rule_category,
                                 "aircraft": aircraft_callsign,
                                 "altitude": aircraft.position.altitude,
-                                "msa": traffic_state.traffic_state.msa,
+                                "msa": actual_state.msa,
                             },
                         )
                         return ConditionResult(satisfied=False, violation=violation)
@@ -670,8 +802,57 @@ class GenericKexCondition(ConditionEvaluator):
         # Por defecto: condición satisfecha (no se detectó violación)
         return ConditionResult(
             satisfied=True,
-            details={"check": "generic_rule_evaluated", "rule_id": executable.source_rule_id}
+            details={"check": "keyword_evaluation", "rule_id": executable.source_rule_id}
         )
+    
+    def _build_traffic_state_summary(
+        self,
+        traffic_state: TrafficState,
+        aircraft_callsign: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """Build human-readable summary of traffic state for LLM."""
+        summary = {
+            "traffic": "",
+            "aircraft": "",
+            "runways": "",
+            "separations": "",
+        }
+        
+        # Traffic state overview
+        summary["traffic"] = f"MSA: {traffic_state.msa or 'N/A'}, Total aircraft: {len(traffic_state.aircrafts)}"
+        
+        # Aircraft of interest
+        if aircraft_callsign and aircraft_callsign in traffic_state.aircrafts:
+            aircraft = traffic_state.aircrafts[aircraft_callsign]
+            summary["aircraft"] = (
+                f"{aircraft_callsign}: "
+                f"Alt={aircraft.position.altitude}ft, "
+                f"Speed={aircraft.position.speed}kts, "
+                f"Heading={aircraft.position.heading}°"
+            )
+        else:
+            summary["aircraft"] = "No specific aircraft provided"
+        
+        # Runway status
+        if traffic_state.runways:
+            runway_list = []
+            for runway_id, runway in traffic_state.runways.items():
+                status = "occupied" if runway.occupied else "free"
+                runway_list.append(f"{runway_id}: {status}")
+            summary["runways"] = ", ".join(runway_list)
+        else:
+            summary["runways"] = "No runway data"
+        
+        # Separation concerns
+        if hasattr(traffic_state, 'projected_separations') and traffic_state.projected_separations:
+            sep_list = []
+            for sep in traffic_state.projected_separations[:3]:  # Limit to first 3
+                sep_list.append(f"{sep.aircraft1}-{sep.aircraft2}: {sep.distance:.1f}nm")
+            summary["separations"] = ", ".join(sep_list)
+        else:
+            summary["separations"] = "No separation data"
+        
+        return summary
     
     def evaluate_all(
         self,

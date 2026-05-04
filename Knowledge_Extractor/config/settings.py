@@ -4,16 +4,12 @@ Centralized configuration for Knowledge Extractor.
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, Literal
 
+from common.llm_client_factory import ModelConfig
+
 
 @dataclass
-class ModelConfig:
-    """Configuration for LLM models."""
-    name: str = "llama3.2"
-    provider: Literal["openai", "gemini", "anthropic"] = "openai"
-    base_url: str = "http://localhost:11434/v1"
-    api_key: str = "ollama"
-    max_retries: int = 3
-    timeout: int = 120
+class KEXModelConfig(ModelConfig):
+    """KEX-specific model config with extraction mode."""
     extraction_mode: Literal["joint", "sequential"] = "joint"
 
 
@@ -47,7 +43,7 @@ class ResumeConfig:
 class PipelineConfig:
     """Main configuration for the knowledge extraction pipeline."""
     # Model configuration
-    model: ModelConfig = field(default_factory=ModelConfig)
+    model: KEXModelConfig = field(default_factory=KEXModelConfig)
     
     # Embedding configuration
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
@@ -77,7 +73,7 @@ class PipelineConfig:
     
     def __post_init__(self):
         if isinstance(self.model, dict):
-            self.model = ModelConfig(**self.model)
+            self.model = KEXModelConfig(**self.model)
         if isinstance(self.embedding, dict):
             self.embedding = EmbeddingConfig(**self.embedding)
         if isinstance(self.resume, dict):

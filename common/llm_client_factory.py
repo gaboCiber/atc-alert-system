@@ -1,9 +1,22 @@
-"""Factory for creating LLM clients with appropriate instructor wrapper."""
+"""Factory for creating LLM clients with appropriate instructor wrapper.
+
+Shared by Knowledge_Extractor and Alert_System.
+"""
 import instructor
 from openai import OpenAI
-from typing import Optional, Any, Tuple
+from dataclasses import dataclass
+from typing import Optional, Any, Tuple, Literal
 
-from ..config.settings import ModelConfig
+
+@dataclass
+class ModelConfig:
+    """Configuration for LLM models."""
+    name: str = "llama3.2"
+    provider: Literal["openai", "gemini", "anthropic"] = "openai"
+    base_url: str = "http://localhost:11434/v1"
+    api_key: str = "ollama"
+    max_retries: int = 3
+    timeout: int = 120
 
 
 def create_instructor_client(config: ModelConfig) -> Tuple[Any, instructor.Mode]:
@@ -17,7 +30,6 @@ def create_instructor_client(config: ModelConfig) -> Tuple[Any, instructor.Mode]
         Tuple of (client, mode) where mode is the instructor Mode to use
     """
     if config.provider == "gemini":
-        # Native Gemini client
         try:
             import google.generativeai as genai
         except ImportError:
@@ -34,7 +46,6 @@ def create_instructor_client(config: ModelConfig) -> Tuple[Any, instructor.Mode]
         return client, instructor.Mode.GEMINI_JSON
     
     elif config.provider == "anthropic":
-        # Anthropic client
         try:
             from anthropic import Anthropic
         except ImportError:
@@ -49,10 +60,14 @@ def create_instructor_client(config: ModelConfig) -> Tuple[Any, instructor.Mode]
         )
         return client, instructor.Mode.ANTHROPIC_JSON
     
-    else:  # openai (default)
-        # OpenAI-compatible client (Ollama, OpenAI, etc.)
+    else:  # openai (default) or ollama
+        # Asegurar que el base_url tenga el formato correcto para Ollama
+        base_url = config.base_url
+        if config.provider == "ollama" and not base_url.endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+        
         openai_client = OpenAI(
-            base_url=config.base_url,
+            base_url=base_url,
             api_key=config.api_key,
         )
         client = instructor.from_openai(
@@ -64,31 +79,32 @@ def create_instructor_client(config: ModelConfig) -> Tuple[Any, instructor.Mode]
 
 def create_raw_client(config: ModelConfig) -> Optional[OpenAI]:
     """
-    Create a raw OpenAI client for fallback extraction (when structured fails).
+    Create a raw OpenAI client for fallback (when structured extraction fails).
     
-    For providers without OpenAI-compatible endpoints, this returns None
-    to indicate no raw fallback is available.
+    For providers without OpenAI-compatible endpoints, returns None.
     
     Args:
         config: Model configuration
         
     Returns:
-        OpenAI client or None if raw fallback not available for this provider
+        OpenAI client or None if raw fallback not available
     """
     if config.provider == "gemini":
-        # For Gemini, we use the OpenAI-compatible endpoint for raw fallback
         return OpenAI(
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
             api_key=config.api_key,
         )
     
     elif config.provider == "anthropic":
-        # Anthropic doesn't have an OpenAI-compatible endpoint
-        # Return None to indicate no raw fallback is available
         return None
     
-    else:  # openai
+    else:  # openai or ollama
+        # Asegurar que el base_url tenga el formato correcto para Ollama
+        base_url = config.base_url
+        if config.provider == "ollama" and not base_url.endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+        
         return OpenAI(
-            base_url=config.base_url,
+            base_url=base_url,
             api_key=config.api_key,
         )

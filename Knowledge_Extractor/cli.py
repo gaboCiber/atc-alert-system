@@ -5,7 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .config.settings import PipelineConfig, ModelConfig, EmbeddingConfig, ResumeConfig
+from .config.settings import PipelineConfig, KEXModelConfig, EmbeddingConfig, ResumeConfig
 from .pipeline.orchestrator import KnowledgeExtractionPipeline
 
 
@@ -160,7 +160,7 @@ def main():
         sys.exit(1)
     
     # Build config
-    model_config = ModelConfig(
+    model_config = KEXModelConfig(
         name=args.model,
         provider=args.provider,
         base_url=args.base_url,

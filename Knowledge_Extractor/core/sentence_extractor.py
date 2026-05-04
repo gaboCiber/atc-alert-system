@@ -6,9 +6,8 @@ from openai import OpenAI
 from typing import List, Optional
 
 from ..schemas.sentence_schemas import SegmentationOutput, LogicalChunk
-from ..config.settings import ModelConfig
+from common.llm_client_factory import ModelConfig, create_instructor_client
 from ..config.prompts import SENTENCE_SEGMENTATION_PROMPT
-from ..extractors.llm_client_factory import create_instructor_client
 
 
 class SentenceExtractor:

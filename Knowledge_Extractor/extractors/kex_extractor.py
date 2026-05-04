@@ -14,7 +14,7 @@ from ..schemas.kex_schemas import (
     RuleExtraction,
     ProcedureExtraction,
 )
-from ..config.settings import ModelConfig
+from common.llm_client_factory import ModelConfig, create_instructor_client, create_raw_client
 from ..config.prompts import (
     build_kex_prompt,
     build_entity_prompt,
@@ -23,7 +23,6 @@ from ..config.prompts import (
     build_rule_prompt,
     build_procedure_prompt,
 )
-from .llm_client_factory import create_instructor_client, create_raw_client
 
 class KEXExtractor:
     """Extract aeronautical knowledge using structured LLM calls."""

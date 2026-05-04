@@ -4,6 +4,7 @@ from .conditions import (
     AltitudeCondition,
     ConditionEvaluator,
     ConditionResult,
+    GenericKexCondition,
     RunwayCondition,
     SeparationCondition,
 )
@@ -16,4 +17,5 @@ __all__ = [
     "AltitudeCondition",
     "SeparationCondition",
     "RunwayCondition",
+    "GenericKexCondition",
 ]

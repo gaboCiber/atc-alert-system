@@ -1,6 +1,6 @@
 """Schemas para integracion KEX - RuleEngine."""
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field
 
 
@@ -17,3 +17,18 @@ class ExecutableRule(BaseModel):
     raw_constraint: Optional[str] = Field(default=None, description="Texto de la constraint original del KEX")
     severity: Optional[str] = Field(default=None, description="Severidad de la regla")
     safety_critical: bool = Field(default=False, description="Si es critica para seguridad")
+
+
+class LLMEvaluationResult(BaseModel):
+    """Resultado estructurado de evaluación LLM para reglas genéricas."""
+    
+    is_violated: bool = Field(..., description="Si la regla está violada según el estado actual")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confianza en la evaluación (0-1)")
+    explanation: str = Field(..., description="Explicación del razonamiento LLM")
+    suggested_action: Optional[str] = Field(default=None, description="Acción sugerida si hay violación")
+    severity_override: Optional[Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]] = Field(
+        default=None, description="Severidad sugerida por LLM"
+    )
+    extracted_values: Optional[Dict[str, Any]] = Field(
+        default=None, description="Valores extraídos del estado para la evaluación"
+    )

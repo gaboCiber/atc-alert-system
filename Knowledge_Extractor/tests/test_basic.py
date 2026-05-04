@@ -4,7 +4,7 @@ Basic tests for Knowledge Extractor.
 import pytest
 from pathlib import Path
 
-from Knowledge_Extractor.config.settings import PipelineConfig, ModelConfig
+from Knowledge_Extractor.config.settings import PipelineConfig, KEXModelConfig
 from Knowledge_Extractor.utils.id_manager import IDManager
 from Knowledge_Extractor.schemas.kex_schemas import Entity, Relationship
 

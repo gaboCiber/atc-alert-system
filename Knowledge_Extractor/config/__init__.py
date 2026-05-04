@@ -1,4 +1,4 @@
 # Config package
-from .settings import PipelineConfig, ModelConfig
+from .settings import PipelineConfig, KEXModelConfig
 
-__all__ = ["PipelineConfig", "ModelConfig"]
+__all__ = ["PipelineConfig", "KEXModelConfig"]
