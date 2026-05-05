@@ -55,12 +55,23 @@ class KEXAdapter:
     1. Recibir reglas del KEX
     2. Mapear reglas a condiciones ejecutables
     3. Configurar el Rule Engine con reglas dinámicas
+    
+    Prioridad de adaptación:
+    1. Reglas específicas (ALTITUDE, SEPARATION, RUNWAY) → evaluadores nativos
+    2. Reglas genéricas con versión compilada → CompiledCondition
+    3. Reglas genéricas sin compilación → GenericKexCondition (LLM runtime)
     """
     
-    def __init__(self):
-        """Inicializa el adaptador KEX."""
+    def __init__(self, llm_config: Optional[Any] = None):
+        """Inicializa el adaptador KEX.
+        
+        Args:
+            llm_config: Configuración LLM para CompiledCondition fallback
+        """
         import json
         import os
+        
+        self._llm_config = llm_config
         
         # Cargar configuracion de patrones desde JSON
         config_path = os.path.join(
@@ -77,6 +88,9 @@ class KEXAdapter:
             except (json.JSONDecodeError, IOError):
                 pass  # Fallback: usar categorizacion por defecto
         
+        # Loader de reglas compiladas (lazy)
+        self._compiled_loader = None
+        
         # Mapeo de severidad
         self._severity_mapping = {
             "CRITICAL": AlertSeverity.CRITICAL,
@@ -85,6 +99,13 @@ class KEXAdapter:
             "LOW": AlertSeverity.LOW,
             "INFO": AlertSeverity.INFO,
         }
+    
+    def _get_compiled_loader(self):
+        """Obtiene o crea el loader de reglas compiladas."""
+        if self._compiled_loader is None:
+            from Alert_System.compilation.loader import CompiledRuleLoader
+            self._compiled_loader = CompiledRuleLoader(llm_config=self._llm_config)
+        return self._compiled_loader
     
     def adapt_rules(self, rules: List[Rule]) -> List[ConditionEvaluator]:
         """
@@ -255,13 +276,18 @@ class KEXAdapter:
         """
         Adapta un ExecutableRule a un ConditionEvaluator.
         
+        Prioridad:
+        1. Reglas conocidas (ALTITUDE, SEPARATION, RUNWAY) → evaluadores nativos
+        2. Reglas genéricas con versión compilada → CompiledCondition
+        3. Reglas genéricas sin compilación → GenericKexCondition (LLM runtime)
+        
         Args:
             executable: Regla en formato ejecutable
             
         Returns:
             ConditionEvaluator o None si no se puede adaptar
         """
-        from Alert_System.rule_engine.conditions import GenericKexCondition
+        from Alert_System.rule_engine.conditions import GenericKexCondition, CompiledCondition
         
         category = executable.rule_category
         
@@ -269,9 +295,23 @@ class KEXAdapter:
         if category == "UNEVALUABLE":
             return None
         
-        # Reglas genéricas: usar GenericKexCondition
+        # Reglas genéricas: buscar versión compilada primero
         if category == "GENERIC":
-            condition = GenericKexCondition()
+            # Intentar cargar regla compilada
+            loader = self._get_compiled_loader()
+            if loader.has_compiled_rule(executable.source_rule_id):
+                compiled_rule = loader.get_compiled_rule(executable.source_rule_id)
+                if compiled_rule:
+                    condition = CompiledCondition(
+                        compiled_rule=compiled_rule,
+                        llm_config=self._llm_config,
+                    )
+                    condition.condition_id = executable.source_rule_id
+                    print(f"📦 Using compiled rule for {executable.source_rule_id}")
+                    return condition
+            
+            # Fallback: usar GenericKexCondition con LLM runtime
+            condition = GenericKexCondition(llm_config=self._llm_config)
             condition.condition_id = executable.source_rule_id
             condition._executable_rule = executable
             return condition

@@ -884,3 +884,269 @@ class GenericKexCondition(ConditionEvaluator):
                 violations.append(result.violation)
         
         return violations
+
+
+class CompiledCondition(ConditionEvaluator):
+    """
+    Envoltura para funciones evaluadoras compiladas por LLM.
+    
+    Carga y ejecuta código Python generado por el compilador de reglas,
+    con namespace restringido y manejo de errores robusto.
+    Si la ejecución falla, hace fallback a GenericKexCondition con LLM runtime.
+    """
+    
+    condition_type = "COMPILED"
+    
+    # Namespace permitido para ejecución de código compilado
+    _SAFE_NAMESPACE_BASE = None  # Se inicializa lazy
+    
+    def __init__(self, compiled_rule: Any = None, llm_config: Optional[Any] = None):
+        """
+        Inicializa la condición compilada.
+        
+        Args:
+            compiled_rule: Instancia de CompiledRule con el código
+            llm_config: Configuración LLM para fallback si la ejecución falla
+        """
+        super().__init__()
+        self._compiled_rule = compiled_rule
+        self._evaluate_fn = None  # Se carga lazy
+        self._load_error = None
+        self.condition_id = compiled_rule.source_rule_id if compiled_rule else ""
+        self._llm_config = llm_config
+        self._fallback_condition = None  # GenericKexCondition para fallback
+    
+    def _get_safe_namespace(self) -> Dict[str, Any]:
+        """Retorna namespace restringido para ejecución de código compilado."""
+        if self._SAFE_NAMESPACE_BASE is None:
+            import math
+            from ..models.traffic_state import (
+                TrafficState, AircraftState, Position, FlightPhase,
+                RunwayState, RunwayOperationMode, WakeTurbulenceCategory, Clearances,
+            )
+            CompiledCondition._SAFE_NAMESPACE_BASE = {
+                "math": math,
+                "TrafficState": TrafficState,
+                "AircraftState": AircraftState,
+                "Position": Position,
+                "FlightPhase": FlightPhase,
+                "RunwayState": RunwayState,
+                "RunwayOperationMode": RunwayOperationMode,
+                "WakeTurbulenceCategory": WakeTurbulenceCategory,
+                "Clearances": Clearances,
+                "__builtins__": {
+                    "True": True, "False": False, "None": None,
+                    "int": int, "float": float, "str": str, "bool": bool,
+                    "list": list, "dict": dict, "tuple": tuple, "set": set,
+                    "len": len, "range": range, "enumerate": enumerate,
+                    "isinstance": isinstance, "abs": abs, "min": min, "max": max,
+                    "round": round, "sorted": sorted, "any": any, "all": all,
+                    "zip": zip, "map": map, "filter": filter,
+                    "print": print, "ValueError": ValueError, "TypeError": TypeError,
+                    "KeyError": KeyError, "AttributeError": AttributeError,
+                    "RuntimeError": RuntimeError, "Exception": Exception,
+                },
+            }
+        return dict(self._SAFE_NAMESPACE_BASE)
+    
+    def _load_function(self) -> Optional[Any]:
+        """
+        Carga la función evaluate desde el código compilado.
+        
+        Returns:
+            Función evaluate o None si falla
+        """
+        if self._evaluate_fn is not None:
+            return self._evaluate_fn
+        
+        if not self._compiled_rule or not self._compiled_rule.compiled_code:
+            self._load_error = "No compiled code available"
+            return None
+        
+        try:
+            namespace = self._get_safe_namespace()
+            exec(self._compiled_rule.compiled_code, namespace)
+            
+            if "evaluate" not in namespace:
+                self._load_error = "Function 'evaluate' not found in compiled code"
+                return None
+            
+            self._evaluate_fn = namespace["evaluate"]
+            return self._evaluate_fn
+            
+        except Exception as e:
+            self._load_error = f"Failed to load compiled function: {e}"
+            return None
+    
+    def _get_fallback_condition(self) -> Optional['GenericKexCondition']:
+        """Obtiene o crea la condición de fallback (GenericKexCondition)."""
+        if self._fallback_condition is None and self._llm_config:
+            from Alert_System.integration.schemas import ExecutableRule
+            
+            self._fallback_condition = GenericKexCondition(llm_config=self._llm_config)
+            if self._compiled_rule:
+                # Crear ExecutableRule para el fallback
+                executable = ExecutableRule(
+                    source_rule_id=self._compiled_rule.source_rule_id,
+                    rule_category=self._compiled_rule.rule_category,
+                    condition_description=self._compiled_rule.condition_description,
+                    raw_trigger=self._compiled_rule.raw_trigger,
+                    raw_constraint=self._compiled_rule.raw_constraint,
+                    severity=self._compiled_rule.severity,
+                    safety_critical=self._compiled_rule.safety_critical,
+                )
+                self._fallback_condition._executable_rule = executable
+                self._fallback_condition.condition_id = self._compiled_rule.source_rule_id
+        
+        return self._fallback_condition
+    
+    def get_required_parameters(self) -> List[str]:
+        """Parámetros requeridos: ninguno (la regla está auto-contenida)."""
+        return []
+    
+    def validate_parameters(self, parameters: Dict[str, Any]) -> Tuple[bool, List[str]]:
+        """Sin parámetros requeridos, siempre válido."""
+        return True, []
+    
+    def evaluate(
+        self,
+        traffic_state: Any,
+        parameters: Dict[str, Any],
+        aircraft_callsign: Optional[str] = None,
+    ) -> ConditionResult:
+        """
+        Evalúa la condición compilada contra el estado del tráfico.
+        
+        Ejecuta la función compilada con namespace restringido.
+        Si falla, hace fallback a GenericKexCondition con LLM runtime.
+        """
+        evaluate_fn = self._load_function()
+        
+        if evaluate_fn is None:
+            # Intentar fallback
+            fallback = self._get_fallback_condition()
+            if fallback:
+                return fallback.evaluate(traffic_state, parameters, aircraft_callsign)
+            
+            return ConditionResult(
+                satisfied=False,
+                violation=None,
+                details={
+                    "error": "Compiled code unavailable and no fallback",
+                    "load_error": self._load_error,
+                }
+            )
+        
+        try:
+            # Obtener el TrafficState real (puede estar envuelto en ProjectedState)
+            actual_state = traffic_state
+            if hasattr(traffic_state, 'traffic_state'):
+                actual_state = traffic_state.traffic_state
+            
+            # Ejecutar la función compilada
+            result_dict = evaluate_fn(actual_state, callsign=aircraft_callsign)
+            
+            # Convertir dict resultado a ConditionResult
+            return self._dict_to_condition_result(result_dict, aircraft_callsign)
+            
+        except Exception as e:
+            # Log del error y fallback
+            error_msg = f"Compiled execution failed: {type(e).__name__}: {str(e)}"
+            
+            fallback = self._get_fallback_condition()
+            if fallback:
+                return fallback.evaluate(traffic_state, parameters, aircraft_callsign)
+            
+            return ConditionResult(
+                satisfied=False,
+                violation=None,
+                details={
+                    "error": error_msg,
+                    "rule_id": self.condition_id,
+                }
+            )
+    
+    def _dict_to_condition_result(
+        self,
+        result_dict: Dict[str, Any],
+        aircraft_callsign: Optional[str] = None,
+    ) -> ConditionResult:
+        """
+        Convierte el dict retornado por la función compilada a ConditionResult.
+        
+        Expected dict format:
+        {
+            "satisfied": bool,
+            "details": dict,
+            "explanation": str,
+            "severity": str  # INFO, LOW, MEDIUM, HIGH, CRITICAL
+        }
+        """
+        satisfied = result_dict.get("satisfied", True)
+        details = result_dict.get("details", {})
+        explanation = result_dict.get("explanation", "")
+        severity_str = result_dict.get("severity", "INFO")
+        
+        # Agregar metadata de compilación
+        details["compiled"] = True
+        details["rule_id"] = self.condition_id
+        
+        if satisfied:
+            return ConditionResult(
+                satisfied=True,
+                violation=None,
+                details=details,
+            )
+        
+        # Crear Violation si no está satisfecha
+        severity_map = {
+            "INFO": AlertSeverity.INFO,
+            "LOW": AlertSeverity.LOW,
+            "MEDIUM": AlertSeverity.MEDIUM,
+            "HIGH": AlertSeverity.HIGH,
+            "CRITICAL": AlertSeverity.CRITICAL,
+        }
+        severity = severity_map.get(severity_str.upper(), AlertSeverity.MEDIUM)
+        
+        violation = Violation(
+            violation_id=f"VIO_{uuid4().hex[:8]}",
+            rule_id=self.condition_id,
+            condition_type=f"COMPILED_{self._compiled_rule.rule_category}" if self._compiled_rule else "COMPILED",
+            severity=severity,
+            details=details,
+            explanation=explanation,
+            suggestion=None,
+        )
+        
+        return ConditionResult(
+            satisfied=False,
+            violation=violation,
+            details=details,
+        )
+    
+    def evaluate_all(
+        self,
+        traffic_state: TrafficState,
+        aircraft_callsign: Optional[str] = None,
+    ) -> List[Violation]:
+        """
+        Evalúa la condición compilada para todas las aeronaves.
+        """
+        violations = []
+        
+        if aircraft_callsign:
+            result = self.evaluate(traffic_state, {}, aircraft_callsign)
+            if not result.satisfied and result.violation:
+                violations.append(result.violation)
+        else:
+            # Evaluar para cada aeronave
+            actual_state = traffic_state
+            if hasattr(traffic_state, 'traffic_state'):
+                actual_state = traffic_state.traffic_state
+            
+            for callsign in actual_state.aircrafts:
+                result = self.evaluate(traffic_state, {}, callsign)
+                if not result.satisfied and result.violation:
+                    violations.append(result.violation)
+        
+        return violations
