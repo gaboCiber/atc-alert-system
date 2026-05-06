@@ -17,6 +17,13 @@ class ExecutableRule(BaseModel):
     raw_constraint: Optional[str] = Field(default=None, description="Texto de la constraint original del KEX")
     severity: Optional[str] = Field(default=None, description="Severidad de la regla")
     safety_critical: bool = Field(default=False, description="Si es critica para seguridad")
+    
+    # Campos para clasificación LLM
+    rule_type: Optional[str] = Field(default=None, description="Tipo de regla (prohibition, obligation, etc.)")
+    modality: Optional[str] = Field(default=None, description="Modalidad (shall, may, etc.)")
+    raw_formal_if_then: Optional[Dict[str, Any]] = Field(default=None, description="Representación formal if-then")
+    raw_applicability: Optional[Dict[str, Any]] = Field(default=None, description="Ámbito de aplicación")
+    explainability: Optional[str] = Field(default=None, description="Razón de la regla")
 
 
 class LLMEvaluationResult(BaseModel):

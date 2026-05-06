@@ -5,12 +5,14 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from .schemas import CompiledRule, CompilationManifest, CompilationStatus
+from .schemas import CompiledRule, CompilationManifest, CompilationStatus, RuleVerdict
 from .validator import validate_code, validate_return_structure, CodeValidationError
 from .prompts import (
     COMPILATION_SYSTEM_PROMPT,
     COMPILATION_USER_PROMPT_TEMPLATE,
     TRAFFIC_STATE_SCHEMA,
+    CLASSIFICATION_SYSTEM_PROMPT,
+    CLASSIFICATION_USER_PROMPT_TEMPLATE,
 )
 
 
@@ -19,6 +21,7 @@ class RuleCompiler:
     Compila reglas KEX genéricas a funciones Python evaluadoras usando LLM.
     
     Flujo:
+    0. Clasifica si la regla es compilable con TrafficState (o es subjetiva)
     1. Genera código Python a partir de la descripción de la regla
     2. Valida estáticamente el código (seguridad, estructura)
     3. Prueba el código con un TrafficState de prueba
@@ -46,6 +49,101 @@ class RuleCompiler:
             except Exception as e:
                 raise RuntimeError(f"Failed to initialize LLM clients: {e}")
     
+    def classify_rule(
+        self,
+        rule_id: str,
+        rule_type: str = "",
+        modality: str = "",
+        trigger: str = "",
+        constraint: str = "",
+        formal_if_then: str = "",
+        applicability: str = "",
+        severity: str = "",
+        explainability: str = "",
+    ) -> RuleVerdict:
+        """
+        Clasifica si una regla es compilable con TrafficState o es subjetiva.
+        
+        Args:
+            rule_id: ID de la regla
+            rule_type: Tipo de regla (prohibition, obligation, etc.)
+            modality: Modalidad (shall, may, etc.)
+            trigger: Descripción del trigger
+            constraint: Descripción de la constraint
+            formal_if_then: Representación formal if-then
+            applicability: Ámbito de aplicación
+            severity: Severidad
+            explainability: Razón de la regla
+            
+        Returns:
+            RuleVerdict con is_compilable, reason, required_fields, confidence
+        """
+        self._initialize_clients()
+        
+        if not self._raw_client:
+            # Sin LLM, asumir compilable por defecto
+            return RuleVerdict(
+                is_compilable=True,
+                reason="No LLM available for classification, assuming compilable",
+                required_fields=[],
+                confidence=0.5,
+            )
+        
+        user_prompt = CLASSIFICATION_USER_PROMPT_TEMPLATE.format(
+            rule_id=rule_id,
+            rule_type=rule_type,
+            modality=modality,
+            trigger=trigger,
+            constraint=constraint,
+            formal_if_then=formal_if_then,
+            applicability=applicability,
+            severity=severity,
+            explainability=explainability,
+        )
+        
+        try:
+            response = self._raw_client.chat.completions.create(
+                model=self.llm_config.name,
+                messages=[
+                    {"role": "system", "content": CLASSIFICATION_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.1,
+                max_tokens=500,
+            )
+            
+            raw_response = response.choices[0].message.content.strip()
+            
+            # Parsear JSON de la respuesta
+            import json as _json
+            # Extraer JSON de posibles code blocks
+            json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
+            if json_match:
+                data = _json.loads(json_match.group())
+                return RuleVerdict(
+                    is_compilable=data.get("is_compilable", True),
+                    reason=data.get("reason", "Unknown"),
+                    required_fields=data.get("required_fields", []),
+                    confidence=data.get("confidence", 0.5),
+                )
+            
+            # Si no se pudo parsear, asumir compilable
+            return RuleVerdict(
+                is_compilable=True,
+                reason=f"Could not parse classification response",
+                required_fields=[],
+                confidence=0.3,
+            )
+            
+        except Exception as e:
+            # En caso de error, asumir compilable para no bloquear el pipeline
+            return RuleVerdict(
+                is_compilable=True,
+                reason=f"Classification error: {e}",
+                required_fields=[],
+                confidence=0.3,
+            )
+    
     def compile_rule(
         self,
         rule_id: str,
@@ -57,6 +155,11 @@ class RuleCompiler:
         safety_critical: bool = False,
         required_state_fields: List[str] = None,
         max_retries: int = 2,
+        rule_type: str = "",
+        modality: str = "",
+        formal_if_then: str = "",
+        applicability: str = "",
+        explainability: str = "",
     ) -> CompiledRule:
         """
         Compila una regla a código Python.
@@ -92,6 +195,31 @@ class RuleCompiler:
             severity=severity,
             safety_critical=safety_critical,
         )
+        
+        # Paso 0: Clasificar si la regla es compilable con TrafficState
+        verdict = self.classify_rule(
+            rule_id=rule_id,
+            rule_type=rule_type,
+            modality=modality,
+            trigger=trigger,
+            constraint=constraint,
+            formal_if_then=formal_if_then,
+            applicability=applicability,
+            severity=severity,
+            explainability=explainability,
+        )
+        
+        compiled_rule.compilation_metadata["classification"] = verdict.model_dump()
+        
+        if not verdict.is_compilable:
+            compiled_rule.compilation_status = CompilationStatus.NOT_COMPILABLE
+            compiled_rule.failure_reason = f"Not compilable: {verdict.reason}"
+            print(f"🚫 Rule {rule_id} is not compilable with TrafficState: {verdict.reason}")
+            return compiled_rule
+        
+        print(f"✓ Rule {rule_id} classified as compilable (confidence: {verdict.confidence:.1f}): {verdict.reason}")
+        if verdict.required_fields:
+            compiled_rule.required_state_fields = verdict.required_fields
         
         for attempt in range(1, max_retries + 1):
             compiled_rule.compilation_metadata["attempts"] = attempt
@@ -167,6 +295,25 @@ class RuleCompiler:
         Returns:
             CompiledRule con el código generado
         """
+        # Extraer campos adicionales para clasificación
+        rule_type = getattr(executable_rule, 'rule_type', '') or ''
+        modality = getattr(executable_rule, 'modality', '') or ''
+        formal_if_then = ''
+        if hasattr(executable_rule, 'raw_formal_if_then') and executable_rule.raw_formal_if_then:
+            fit = executable_rule.raw_formal_if_then
+            if isinstance(fit, dict):
+                formal_if_then = f"IF {fit.get('if', fit.get('if_condition', ''))} THEN {fit.get('then', fit.get('then_action', ''))}"
+            else:
+                formal_if_then = str(fit)
+        applicability = ''
+        if hasattr(executable_rule, 'raw_applicability') and executable_rule.raw_applicability:
+            app = executable_rule.raw_applicability
+            if isinstance(app, dict):
+                applicability = app.get('scope', '') or ', '.join(app.get('actors', []))
+            else:
+                applicability = str(app)
+        explainability = getattr(executable_rule, 'explainability', '') or ''
+        
         return self.compile_rule(
             rule_id=executable_rule.source_rule_id,
             category=executable_rule.rule_category,
@@ -176,6 +323,11 @@ class RuleCompiler:
             severity=executable_rule.severity or "MEDIUM",
             safety_critical=executable_rule.safety_critical,
             required_state_fields=executable_rule.required_state_fields,
+            rule_type=rule_type,
+            modality=modality,
+            formal_if_then=formal_if_then,
+            applicability=applicability,
+            explainability=explainability,
         )
     
     def compile_batch(
@@ -216,7 +368,7 @@ class RuleCompiler:
             compiled = self.compile_executable_rule(rule)
             manifest.add_rule(compiled)
             
-            status = "✅" if compiled.compilation_status == CompilationStatus.COMPILED else "❌"
+            status = "✅" if compiled.compilation_status == CompilationStatus.COMPILED else ("🚫" if compiled.compilation_status == CompilationStatus.NOT_COMPILABLE else "❌")
             print(f"  {status} {compiled.source_rule_id}: {compiled.compilation_status.value}")
             if compiled.failure_reason:
                 print(f"  Reason: {compiled.failure_reason}")
@@ -236,6 +388,7 @@ class RuleCompiler:
         
         print(f"\n📊 Compilation summary:")
         print(f"  Compiled: {manifest.total_compiled}")
+        print(f"  Not compilable (subjective): {manifest.total_not_compilable}")
         print(f"  Failed (fallback): {manifest.total_failed}")
         print(f"  Total: {len(manifest.rules)}")
         

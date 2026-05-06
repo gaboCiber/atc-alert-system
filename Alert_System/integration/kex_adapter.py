@@ -161,7 +161,7 @@ class KEXAdapter:
         formal_if = rule.formal_if_then.if_condition if rule.formal_if_then else ""
         formal_then = rule.formal_if_then.then_action if rule.formal_if_then else ""
         
-        # Crear ExecutableRule base
+        # Crear ExecutableRule base con campos de clasificación
         executable = ExecutableRule(
             source_rule_id=rule.id,
             rule_category=category,
@@ -169,6 +169,11 @@ class KEXAdapter:
             raw_constraint=formal_then,
             severity=rule.severity if hasattr(rule, 'severity') else None,
             safety_critical=getattr(rule, 'safety_critical', False),
+            rule_type=rule.rule_type.value if hasattr(rule, 'rule_type') else None,
+            modality=rule.modality.value if hasattr(rule, 'modality') else None,
+            raw_formal_if_then=rule.formal_if_then.model_dump() if rule.formal_if_then else None,
+            raw_applicability=rule.applicability.model_dump() if rule.applicability else None,
+            explainability=getattr(rule, 'explainability', None),
         )
         
         # Si es categoría conocida, extraer parámetros estructurados

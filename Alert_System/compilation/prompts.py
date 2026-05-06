@@ -82,7 +82,12 @@ CRITICAL RULES:
 9. Use `traffic_state.aircrafts` dict to iterate all aircraft.
 10. Use `traffic_state.get_nearby_aircraft(callsign)` for separation checks.
 11. Use `TrafficState.calculate_distance(pos1, pos2)` for distance in NM.
-12. Keep the function concise but correct. Prioritize correctness over brevity.
+12. **CRITICAL**: Entity references (like E002, E015) represent CONCEPTS, not technical codes:
+   - E002 = "Standard Phraseology" → Check if communications follow proper patterns
+   - E015 = "RTF" → Check if radiotelephony is used appropriately
+   - NEVER match entity IDs directly (e.g., squawk == "E002")
+   - Generate code that evaluates the MEANING of these concepts
+13. Keep the function concise but correct. Prioritize correctness over brevity.
 """
 
 COMPILATION_USER_PROMPT_TEMPLATE = """## ATC Rule to Compile
@@ -179,4 +184,85 @@ Function to validate:
 
 Respond with a JSON object:
 {{"is_safe": true/false, "issues": ["list of issues found"], "has_correct_signature": true/false, "has_correct_return": true/false}}
+"""
+
+CLASSIFICATION_SYSTEM_PROMPT = """You are an ATC rule classifier. Your job is to determine whether an ATC rule can be objectively evaluated using ONLY the data available in a TrafficState object, or if it requires subjective judgment, external context, or information not present in TrafficState.
+
+## TrafficState Available Fields
+
+```python
+class TrafficState:
+    sector_id: str
+    aircrafts: dict[str, AircraftState]  # indexed by callsign
+    runways: dict[str, RunwayState]      # indexed by runway_id
+    msa: int|None                        # Minimum Sector Altitude (ft)
+    qnh: int|None                        # Pressure (hPa)
+    wind: dict|None                      # Wind direction/speed
+
+class AircraftState:
+    callsign: str
+    position: Position  # lat, lon, altitude, heading, speed, vertical_rate
+    flight_phase: FlightPhase  # ground, takeoff, climb, cruise, descent, approach, landing, taxi
+    clearances: Clearances  # altitude_assigned, heading_assigned, runway_assigned, route, squawk, speed_assigned
+    restrictions: list[str]
+    wake_turbulence: str  # L, M, H, S
+    aircraft_type: str|None
+    is_emergency: bool
+    emergency_type: str|None
+
+class RunwayState:
+    runway_id: str
+    occupied: bool
+    occupied_by: str|None
+    operation_mode: str  # landing, takeoff, mixed, closed
+    holding_short: list[str]
+    landing_queue: list[str]
+    closed_until: str|None
+    closure_reason: str|None
+
+# Available methods:
+# get_aircraft(callsign) -> AircraftState|None
+# get_runway(runway_id) -> RunwayState|None
+# get_nearby_aircraft(callsign, max_distance_nm) -> list[AircraftState]
+# calculate_distance(pos1, pos2) -> float (NM)
+```
+
+## Classification Criteria
+
+**COMPILABLE (is_compilable=True)**: The rule checks objective, measurable conditions that can be determined from TrafficState fields. Examples:
+- Altitude below MSA
+- Separation between aircraft
+- Runway occupancy
+- Flight phase violations
+- Speed/heading deviations from clearances
+- Aircraft on wrong runway
+
+**NOT COMPILABLE (is_compilable=False)**: The rule requires:
+- Subjective judgment (e.g., "use standard phraseology", "be concise")
+- Communication content analysis (e.g., what words were spoken)
+- Human intent interpretation (e.g., "pilot should understand")
+- External data not in TrafficState (e.g., NOTAMs, weather beyond wind/QNH)
+- Procedural compliance that cannot be measured from state alone
+- Rules about what SHOULD happen vs what IS happening (normative vs descriptive)
+
+Respond with a JSON object with these exact fields:
+- "is_compilable": bool
+- "reason": str (brief explanation of why)
+- "required_fields": list[str] (TrafficState fields needed, empty if not compilable)
+- "confidence": float (0.0-1.0)
+"""
+
+CLASSIFICATION_USER_PROMPT_TEMPLATE = """## Rule to Classify
+
+**Rule ID**: {rule_id}
+**Rule Type**: {rule_type}
+**Modality**: {modality}
+**Trigger**: {trigger}
+**Constraint**: {constraint}
+**Formal If-Then**: {formal_if_then}
+**Applicability**: {applicability}
+**Severity**: {severity}
+**Explainability**: {explainability}
+
+Is this rule compilable into a Python function that evaluates TrafficState?
 """

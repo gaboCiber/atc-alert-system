@@ -12,6 +12,21 @@ class CompilationStatus(str, Enum):
     COMPILED = "compiled"
     FAILED = "failed"
     PENDING = "pending"
+    NOT_COMPILABLE = "not_compilable"  # Regla subjetiva, no verificable con TrafficState
+
+
+class RuleVerdict(BaseModel):
+    """Veredicto de clasificación: ¿es la regla compilable con TrafficState?"""
+    is_compilable: bool = Field(..., description="Si la regla puede evaluarse objetivamente con TrafficState")
+    reason: str = Field(..., description="Razón de la clasificación")
+    required_fields: List[str] = Field(
+        default_factory=list,
+        description="Campos de TrafficState necesarios para evaluar la regla"
+    )
+    confidence: float = Field(
+        default=0.0, ge=0.0, le=1.0,
+        description="Confianza en la clasificación (0-1)"
+    )
 
 
 class CompiledRule(BaseModel):
@@ -68,6 +83,7 @@ class CompilationManifest(BaseModel):
     total_compiled: int = Field(default=0, description="Total reglas compiladas exitosamente")
     total_failed: int = Field(default=0, description="Total reglas que fallaron compilación")
     total_fallback: int = Field(default=0, description="Total reglas que usan fallback LLM runtime")
+    total_not_compilable: int = Field(default=0, description="Total reglas no compilables (subjetivas)")
     
     def add_rule(self, rule: CompiledRule) -> None:
         """Agrega una regla al manifiesto y actualiza contadores."""
@@ -76,4 +92,7 @@ class CompilationManifest(BaseModel):
             self.total_compiled += 1
         elif rule.compilation_status == CompilationStatus.FAILED:
             self.total_failed += 1
+            self.total_fallback += 1
+        elif rule.compilation_status == CompilationStatus.NOT_COMPILABLE:
+            self.total_not_compilable += 1
             self.total_fallback += 1
