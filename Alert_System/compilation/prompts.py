@@ -66,13 +66,26 @@ class TrafficState(BaseModel):
 
 COMPILATION_SYSTEM_PROMPT = """You are an expert ATC (Air Traffic Control) rule compiler. Your task is to convert natural language ATC rules into Python evaluation functions.
 
-CRITICAL RULES:
-1. Generate ONLY the `evaluate` function — no imports, no classes, no code outside the function.
+You must respond with a structured JSON object containing:
+- "code": The complete Python function (string)
+- "explanation": Brief explanation of what code does (string, optional)
+- "required_state_fields": List of TrafficState fields used (list of strings, optional)
+
+CRITICAL VALIDATION REQUIREMENTS:
+Your code will be automatically validated before acceptance. Ensure:
+1. VALID SYNTAX: Code must parse without syntax errors
+2. CORRECT FUNCTION: Must contain `def evaluate(traffic_state, callsign=None):`
+3. NO FORBIDDEN IMPORTS: Only allowed imports are `math` and `datetime`
+4. NO FORBIDDEN OPERATIONS: Cannot use os, subprocess, open, exec, eval, etc.
+5. CORRECT RETURN STRUCTURE: Must return dict with keys: "satisfied", "details", "explanation", "severity"
+
+CODE GENERATION RULES:
+1. Generate ONLY the `evaluate` function — no imports, no classes, no code outside function.
 2. The function signature MUST be exactly: `def evaluate(traffic_state, callsign=None):`
 3. The function MUST return a dict with these exact keys:
    - "satisfied" (bool): True if rule is satisfied (no violation), False if violated
    - "details" (dict): Relevant values extracted from traffic_state
-   - "explanation" (str): Human-readable explanation of the result
+   - "explanation" (str): Human-readable explanation of result
    - "severity" (str): One of "INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"
 4. You may use: `math` module (already imported in namespace)
 5. You may NOT use: os, subprocess, open, exec, eval, import, __import__, globals, locals, or any file/network/system operations.
@@ -88,6 +101,17 @@ CRITICAL RULES:
    - NEVER match entity IDs directly (e.g., squawk == "E002")
    - Generate code that evaluates the MEANING of these concepts
 13. Keep the function concise but correct. Prioritize correctness over brevity.
+14. The function MUST contain `def evaluate(` exactly as specified.
+
+SELF-VALIDATION CHECKLIST before responding:
+□ No syntax errors
+□ Function signature is correct
+□ No forbidden imports
+□ No forbidden operations
+□ Return structure includes all required keys
+□ Code is safe and follows all rules
+
+If validation fails, your response will be automatically rejected and you'll need to retry.
 """
 
 COMPILATION_USER_PROMPT_TEMPLATE = """## ATC Rule to Compile
@@ -245,11 +269,13 @@ class RunwayState:
 - Procedural compliance that cannot be measured from state alone
 - Rules about what SHOULD happen vs what IS happening (normative vs descriptive)
 
-Respond with a JSON object with these exact fields:
-- "is_compilable": bool
-- "reason": str (brief explanation of why)
-- "required_fields": list[str] (TrafficState fields needed, empty if not compilable)
-- "confidence": float (0.0-1.0)
+You must respond with a structured JSON object containing exactly these fields:
+- "is_compilable": bool (True if rule can be evaluated with TrafficState data)
+- "reason": str (detailed explanation of your classification decision)
+- "required_fields": list[str] (TrafficState fields needed for evaluation, empty if not compilable)
+- "confidence": float (0.0-1.0, your confidence in this classification)
+
+Your response will be automatically validated to ensure it contains all required fields with proper types.
 """
 
 CLASSIFICATION_USER_PROMPT_TEMPLATE = """## Rule to Classify

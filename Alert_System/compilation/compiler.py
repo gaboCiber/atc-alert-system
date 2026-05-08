@@ -5,8 +5,11 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from .schemas import CompiledRule, CompilationManifest, CompilationStatus, RuleVerdict
-from .validator import validate_code, validate_return_structure, CodeValidationError
+from .schemas import (
+    CompiledRule, CompilationManifest, CompilationStatus, RuleVerdict,
+    ClassificationResponse, GeneratedCodeResponse, ValidatedCodeResponse
+)
+# Validación ahora manejada por Pydantic en ValidatedCodeResponse
 from .prompts import (
     COMPILATION_SYSTEM_PROMPT,
     COMPILATION_USER_PROMPT_TEMPLATE,
@@ -37,17 +40,24 @@ class RuleCompiler:
         """
         self.llm_config = llm_config
         self._instructor_client = None
-        self._raw_client = None
+        self.mode = None  # Para referencia del modo de Instructor
     
     def _initialize_clients(self):
-        """Inicializa clientes LLM de forma lazy."""
+        """Inicializa cliente LLM de forma lazy usando solo Instructor."""
         if self.llm_config and not self._instructor_client:
             try:
-                from common.llm_client_factory import create_instructor_client, create_raw_client
-                self._instructor_client, _ = create_instructor_client(self.llm_config)
-                self._raw_client = create_raw_client(self.llm_config)
+                from common.llm_client_factory import create_instructor_client
+                self._instructor_client, self.mode = create_instructor_client(self.llm_config)
+                
+                # Agregar callback para logging de errores de validación (como en Knowledge_Extractor)
+                self._instructor_client.on("parse:error", self._log_validation_error)
+                
             except Exception as e:
-                raise RuntimeError(f"Failed to initialize LLM clients: {e}")
+                raise RuntimeError(f"Failed to initialize LLM client: {e}")
+    
+    def _log_validation_error(self, error: Exception):
+        """Callback que se ejecuta cuando Instructor falla una validación."""
+        print(f"⚠️ Instructor validation error: {error}. Retrying automatically...")
     
     def classify_rule(
         self,
@@ -80,7 +90,7 @@ class RuleCompiler:
         """
         self._initialize_clients()
         
-        if not self._raw_client:
+        if not self._instructor_client:
             # Sin LLM, asumir compilable por defecto
             return RuleVerdict(
                 is_compilable=True,
@@ -102,37 +112,24 @@ class RuleCompiler:
         )
         
         try:
-            response = self._raw_client.chat.completions.create(
+            
+            # Usar Instructor con response_model estructurado
+            response = self._instructor_client.chat.completions.create(
                 model=self.llm_config.name,
+                response_model=ClassificationResponse,
+                max_retries=self.llm_config.max_retries,
                 messages=[
                     {"role": "system", "content": CLASSIFICATION_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.1,
-                max_tokens=500,
             )
             
-            raw_response = response.choices[0].message.content.strip()
-            
-            # Parsear JSON de la respuesta
-            import json as _json
-            # Extraer JSON de posibles code blocks
-            json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
-            if json_match:
-                data = _json.loads(json_match.group())
-                return RuleVerdict(
-                    is_compilable=data.get("is_compilable", True),
-                    reason=data.get("reason", "Unknown"),
-                    required_fields=data.get("required_fields", []),
-                    confidence=data.get("confidence", 0.5),
-                )
-            
-            # Si no se pudo parsear, asumir compilable
+            # Convertir a RuleVerdict manteniendo compatibilidad
             return RuleVerdict(
-                is_compilable=True,
-                reason=f"Could not parse classification response",
-                required_fields=[],
-                confidence=0.3,
+                is_compilable=response.is_compilable,
+                reason=response.reason,
+                required_fields=response.required_fields,
+                confidence=response.confidence,
             )
             
         except Exception as e:
@@ -221,69 +218,39 @@ class RuleCompiler:
         if verdict.required_fields:
             compiled_rule.required_state_fields = verdict.required_fields
         
-        for attempt in range(1, max_retries + 1):
-            compiled_rule.compilation_metadata["attempts"] = attempt
+        try:
+            # Paso 1: Generar código con LLM (Instructor maneja validación y reintentos)
+            code = self._generate_code(
+                rule_id=rule_id,
+                category=category,
+                description=description,
+                trigger=trigger,
+                constraint=constraint,
+                severity=severity,
+                safety_critical=safety_critical,
+            )
             
-            try:
-                # Paso 1: Generar código con LLM
-                code = self._generate_code(
-                    rule_id=rule_id,
-                    category=category,
-                    description=description,
-                    trigger=trigger,
-                    constraint=constraint,
-                    severity=severity,
-                    safety_critical=safety_critical,
-                )
-                
-                # Paso 2: Validar estáticamente
-                is_valid, issues = validate_code(code)
-                if not is_valid:
-                    # Intentar corregir si hay issues menores
-                    if attempt < max_retries:
-                        print(f"⚠️ Attempt {attempt}: Validation issues: {issues}. Retrying...")
-                        continue
-                    compiled_rule.compilation_status = CompilationStatus.FAILED
-                    compiled_rule.failure_reason = f"Static validation failed: {issues}"
-                    compiled_rule.compiled_code = code  # Guardar para debug
-                    return compiled_rule
-                
-                # Paso 2b: Validar estructura de retorno
-                return_valid, return_issues = validate_return_structure(code)
-                if not return_valid:
-                    if attempt < max_retries:
-                        print(f"⚠️ Attempt {attempt}: Return structure issues: {return_issues}. Retrying...")
-                        continue
-                    # No es fatal, pero registrar
-                    compiled_rule.compilation_metadata["return_warnings"] = return_issues
-                
-                # Paso 3: Probar el código
-                test_ok, test_error = self._test_code(code)
-                if not test_ok:
-                    if attempt < max_retries:
-                        print(f"⚠️ Attempt {attempt}: Test execution failed: {test_error}. Retrying...")
-                        continue
-                    compiled_rule.compilation_status = CompilationStatus.FAILED
-                    compiled_rule.failure_reason = f"Test execution failed: {test_error}"
-                    compiled_rule.compiled_code = code
-                    return compiled_rule
-                
-                # Éxito
-                compiled_rule.compiled_code = code
-                compiled_rule.compilation_status = CompilationStatus.COMPILED
-                compiled_rule.compilation_metadata["compiled_at"] = datetime.utcnow().isoformat()
-                print(f"✅ Rule {rule_id} compiled successfully (attempt {attempt})")
-                return compiled_rule
-                
-            except Exception as e:
-                if attempt < max_retries:
-                    print(f"⚠️ Attempt {attempt}: Compilation error: {e}. Retrying...")
-                    continue
+            # Paso 2: Probar el código (última verificación de ejecución)
+            test_ok, test_error = self._test_code(code)
+            if not test_ok:
                 compiled_rule.compilation_status = CompilationStatus.FAILED
-                compiled_rule.failure_reason = f"Compilation error: {str(e)}"
+                compiled_rule.failure_reason = f"Test execution failed: {test_error}"
+                compiled_rule.compiled_code = code
                 return compiled_rule
-        
-        return compiled_rule
+            
+            # Éxito - el código ya está validado por Instructor/Pydantic
+            compiled_rule.compiled_code = code
+            compiled_rule.compilation_status = CompilationStatus.COMPILED
+            compiled_rule.compilation_metadata["compiled_at"] = datetime.utcnow().isoformat()
+            compiled_rule.compilation_metadata["attempts"] = 1  # Instructor maneja reintentos internamente
+            print(f"✅ Rule {rule_id} compiled successfully")
+            return compiled_rule
+            
+        except Exception as e:
+            compiled_rule.compilation_status = CompilationStatus.FAILED
+            compiled_rule.failure_reason = f"Compilation error: {str(e)}"
+            compiled_rule.compilation_metadata["attempts"] = 1
+            return compiled_rule
     
     def compile_executable_rule(self, executable_rule: Any) -> CompiledRule:
         """
@@ -408,14 +375,14 @@ class RuleCompiler:
         safety_critical: bool,
     ) -> str:
         """
-        Genera código Python usando el LLM.
+        Genera código Python usando el LLM con Instructor.
         
         Returns:
             Código Python de la función evaluate
         """
         self._initialize_clients()
         
-        if not self._raw_client:
+        if not self._instructor_client:
             raise RuntimeError("No LLM client available for compilation")
         
         user_prompt = COMPILATION_USER_PROMPT_TEMPLATE.format(
@@ -429,64 +396,23 @@ class RuleCompiler:
             traffic_state_schema=TRAFFIC_STATE_SCHEMA,
         )
         
-        response = self._raw_client.chat.completions.create(
+        # Usar Instructor con response_model validado
+        response = self._instructor_client.chat.completions.create(
             model=self.llm_config.name,
+            response_model=ValidatedCodeResponse,
+            max_retries=self.llm_config.max_retries,
             messages=[
                 {"role": "system", "content": COMPILATION_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,  # Baja temperatura para código determinista
-            max_tokens=2000,
         )
         
-        raw_code = response.choices[0].message.content
-        
-        # Extraer código de markdown code blocks si está presente
-        code = self._extract_code(raw_code)
-        
-        return code
+        # El código ya viene validado por Instructor y Pydantic
+        # Incluye validación de sintaxis, imports prohibidos, estructura de retorno, etc.
+        return response.code
     
-    def _extract_code(self, raw_response: str) -> str:
-        """
-        Extrae código Python de la respuesta del LLM.
         
-        Maneja respuestas que vienen envueltas en ```python ... ```
-        """
-        # Intentar extraer de code blocks
-        patterns = [
-            r"```python\s*\n(.*?)\n\s*```",
-            r"```\s*\n(.*?)\n\s*```",
-            r"```python\s+(.*?)\n```",
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, raw_response, re.DOTALL)
-            if match:
-                return match.group(1).strip()
-        
-        # Si no hay code blocks, asumir que toda la respuesta es código
-        # (eliminar líneas que no sean código)
-        lines = raw_response.strip().split("\n")
-        code_lines = []
-        in_function = False
-        
-        for line in lines:
-            stripped = line.strip()
-            # Skip empty lines at start
-            if not in_function and not stripped:
-                continue
-            # Detect start of function
-            if stripped.startswith("def "):
-                in_function = True
-            if in_function:
-                code_lines.append(line)
-        
-        if code_lines:
-            return "\n".join(code_lines)
-        
-        # Last resort: return entire response
-        return raw_response.strip()
-    
     def _test_code(self, code: str) -> Tuple[bool, str]:
         """
         Prueba el código generado ejecutándolo con un TrafficState de prueba.
