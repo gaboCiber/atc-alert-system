@@ -14,6 +14,7 @@ from ASR.transcription import (
     HuggingFaceModel,
     FasterWhisperModel,
     WhisperATCModel,
+    WhisperCppModel,
     TranscriptionPipeline,
     MultiModelPipeline,
     get_prompt,
@@ -51,7 +52,7 @@ Ejemplos:
     # Modelo
     parser.add_argument(
         "--model", "-m",
-        choices=["whisper", "whisperatc", "huggingface", "faster-whisper"],
+        choices=["whisper", "whisperatc", "huggingface", "faster-whisper", "whisper-cpp"],
         default="whisper",
         help="Tipo de modelo a usar (default: whisper)"
     )
@@ -91,6 +92,33 @@ Ejemplos:
         help="Versión de WhisperATC (default: v3)"
     )
     
+    # Opciones de WhisperCpp
+    parser.add_argument(
+        "--threads", "-t",
+        type=int,
+        default=None,
+        help="Número de threads para WhisperCpp (default: auto-detectar)"
+    )
+    
+    parser.add_argument(
+        "--language",
+        default="auto",
+        help="Idioma para WhisperCpp (default: auto-detectar)"
+    )
+    
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Temperatura para muestreo (0.0 = más determinista, default: 0.0)"
+    )
+    
+    parser.add_argument(
+        "--beam-search",
+        action="store_true",
+        help="Usar beam search (mejor calidad, más lento)"
+    )
+    
     # Input/Output
     parser.add_argument(
         "--input", "-i",
@@ -126,7 +154,7 @@ Ejemplos:
     parser.add_argument(
         "--device", "-d",
         default="auto",
-        choices=["auto", "cpu", "cuda"],
+        choices=["auto", "cpu", "cuda", "vulkan"],
         help="Dispositivo para inferencia (default: auto)"
     )
     
@@ -217,6 +245,17 @@ def create_model(args):
             device=args.device,
             prompt=prompt,
             compute_type="int8"
+        )
+    
+    elif args.model == "whisper-cpp":
+        model = WhisperCppModel(
+            model_name=args.model_size,
+            device=args.device,
+            prompt=prompt,
+            n_threads=args.threads,
+            language=args.language,
+            temperature=args.temperature,
+            beam_search=args.beam_search
         )
     
     else:

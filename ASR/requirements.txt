@@ -8,6 +8,9 @@ openai-whisper>=20231117
 # Faster Whisper (optimización CTranslate2)
 faster-whisper>=0.10.0
 
+# Whisper.cpp bindings (alto rendimiento)
+pywhispercpp>=0.0.1
+
 # HuggingFace Transformers (para WhisperATC y otros modelos)
 transformers>=4.30.0
 torch>=2.0.0

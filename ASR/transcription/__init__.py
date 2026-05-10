@@ -9,7 +9,7 @@ modelos ASR (Whisper, HuggingFace, FasterWhisper) con una interfaz unificada.
 from .base import BaseASRModel, TranscriptionResult
 
 # Modelos
-from .models import WhisperModel, WhisperPromptedModel, HuggingFaceModel, WhisperATCModel, FasterWhisperModel
+from .models import WhisperModel, WhisperPromptedModel, HuggingFaceModel, WhisperATCModel, FasterWhisperModel, WhisperCppModel
 
 # Pipeline y output
 from .pipeline import TranscriptionPipeline, MultiModelPipeline
@@ -35,6 +35,7 @@ __all__ = [
     "HuggingFaceModel",
     "WhisperATCModel",
     "FasterWhisperModel",
+    "WhisperCppModel",
     # Pipeline
     "TranscriptionPipeline",
     "MultiModelPipeline",

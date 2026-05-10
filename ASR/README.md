@@ -10,6 +10,7 @@ Complete module for transcription, normalization, and evaluation of ATC (Air Tra
 # Transcription
 openai-whisper          # For WhisperModel
 faster-whisper          # For FasterWhisperModel
+pywhispercpp           # For WhisperCppModel (high performance)
 transformers            # For HuggingFaceModel
 torch                   # PyTorch backend
 tqdm                    # Progress bars
@@ -29,8 +30,14 @@ python-docx             # DOCX ground truth reading
 pip install -r ASR/requirements.txt
 
 # Or install manually as needed
-pip install openai-whisper faster-whisper transformers torch tqdm
+pip install openai-whisper faster-whisper pywhispercpp transformers torch tqdm
 pip install jiwer python-docx
+
+# For WhisperCpp with CUDA support
+GGML_CUDA=1 pip install pywhispercpp
+
+# For WhisperCpp with Vulkan support
+GGML_VULKAN=1 pip install pywhispercpp
 ```
 
 ---
@@ -67,6 +74,7 @@ ASR transcription pipeline with support for multiple models and output formats.
 | `WhisperATCModel` | HuggingFace WhisperATC (v2/v3) optimized for ATC | No |
 | `HuggingFaceModel` | Any HuggingFace ASR model | Optional |
 | `FasterWhisperModel` | Whisper optimized with CTranslate2 | Yes |
+| `WhisperCppModel` | Whisper.cpp bindings (high performance C++ implementation) | Yes |
 
 ### Basic Usage
 
@@ -130,6 +138,45 @@ faster = FasterWhisperModel(
     compute_type="int8",     # int8 | int8_float16 | float16 | float32
     beam_size=5
 )
+```
+
+### WhisperCpp (High Performance)
+
+```python
+from ASR.transcription import WhisperCppModel
+
+# Optimized for speed and efficiency
+whisper_cpp = WhisperCppModel(
+    model_name="large-v3",
+    device="auto",           # auto | cpu | cuda | vulkan
+    prompt="default",        # ATC prompt for better accuracy
+    n_threads=None,          # Auto-detect CPU cores
+    language="auto",         # Auto-detect or specify (en, es, etc.)
+    temperature=0.0,         # 0.0 = more deterministic, higher = more creative
+    beam_search=False        # True for better quality (slower), False for speed
+)
+
+pipeline = TranscriptionPipeline(whisper_cpp, output_format="csv")
+pipeline.run_directory("./audio", "./results.csv")
+```
+
+**WhisperCpp Features:**
+- **Performance**: 2-4x faster than original Whisper
+- **Backends**: CPU, CUDA, Vulkan support
+- **Efficiency**: Lower memory usage
+- **GGML Models**: Uses optimized GGML format models
+- **Quality**: Maintains transcription accuracy for ATC
+
+**Installation Notes:**
+```bash
+# Basic installation
+pip install pywhispercpp
+
+# For CUDA support
+GGML_CUDA=1 pip install pywhispercpp
+
+# For Vulkan support
+GGML_VULKAN=1 pip install pywhispercpp
 ```
 
 ### Available Prompts
@@ -243,6 +290,28 @@ python -m ASR.transcription.cli \
     --input ./audio \
     --output results.csv
 
+# WhisperCpp (high performance)
+python -m ASR.transcription.cli \
+    --model whisper-cpp \
+    --model-size large-v3 \
+    --device cuda \
+    --input ./audio \
+    --output results.csv \
+    --prompt default \
+    --temperature 0.0 \
+    --threads 8
+
+# WhisperCpp with beam search (better quality)
+python -m ASR.transcription.cli \
+    --model whisper-cpp \
+    --model-size large-v3 \
+    --device cuda \
+    --input ./audio \
+    --output results.csv \
+    --prompt default \
+    --beam-search \
+    --temperature 0.1
+
 # Append mode (add results to existing CSV)
 python -m ASR.transcription.cli \
     --model whisperatc \
@@ -263,13 +332,17 @@ python -m ASR.transcription.cli \
 
 | Parameter | Options | Description |
 |-----------|---------|-------------|
-| `--model` | whisper, whisperatc, huggingface, faster-whisper | Model type |
+| `--model` | whisper, whisperatc, huggingface, faster-whisper, whisper-cpp | Model type |
 | `--model-size` | tiny, base, small, medium, large-v1/2/3 | Whisper size |
 | `--hf-model` | string | HuggingFace model ID |
 | `--chunk-length-s` | int | Chunk length in seconds for HuggingFace (None disables chunking, default: None) |
 | `--version` | v2, v3 | WhisperATC version |
-| `--device` | auto, cpu, cuda | Device |
+| `--device` | auto, cpu, cuda, vulkan | Device |
 | `--prompt` | default, minimal, extended, none | Prompt type |
+| `--threads` | int | Number of threads for WhisperCpp (default: auto-detect) |
+| `--language` | string | Language for WhisperCpp (default: auto) |
+| `--temperature` | float | Temperature for sampling (0.0 = more deterministic, default: 0.0) |
+| `--beam-search` | flag | Use beam search for better quality (slower) |
 | `--format` | csv, json | Output format |
 | `--timestamps` | flag | Include timestamps |
 | `--append` | flag | Append results to existing file (CSV only) |

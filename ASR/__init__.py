@@ -11,7 +11,7 @@ from .evaluation import (
     Atco2DataLoader,
 )
 
-from .transcription import WhisperModel, FasterWhisperModel, WhisperATCModel, HuggingFaceModel, TranscriptionPipeline, TranscriptionResult
+from .transcription import WhisperModel, FasterWhisperModel, WhisperATCModel, HuggingFaceModel, WhisperCppModel, TranscriptionPipeline, TranscriptionResult
 
 # Noise reduction (optional - requires separate Python 3.9 environment)
 try:
@@ -35,6 +35,7 @@ __all__ = [
     'FasterWhisperModel',
     'WhisperATCModel',
     'HuggingFaceModel',
+    'WhisperCppModel',
     'TranscriptionPipeline',
     'TranscriptionResult',
 ]
