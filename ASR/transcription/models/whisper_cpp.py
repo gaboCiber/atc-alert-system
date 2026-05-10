@@ -94,9 +94,9 @@ class WhisperCppModel(BaseASRModel):
             # Importar aquí para evitar dependencias tempranas
             from pywhispercpp.utils import tokenize_text
             return tokenize_text(prompt)
-        except ImportError:
-            # Si no hay tokenización disponible, usar prompt directamente
-            # whisper.cpp manejará la conversión
+        except (ImportError, AttributeError):
+            # Si no hay tokenización disponible o falla, devolver None
+            # whisper.cpp manejará la conversión o usará initial_prompt
             return None
     
     def load(self) -> None:
@@ -111,36 +111,17 @@ class WhisperCppModel(BaseASRModel):
             )
         
         try:
-            # Configurar backend
-            model_params = {
-                "print_realtime": False,  # Skip non-essential feature
-                "print_progress": False,   # Skip non-essential feature
-                "print_special": False,    # Skip non-essential feature
-                "print_timestamps": False, # Skip non-essential feature
-                "token_timestamps": False, # Skip non-essential feature (performance heavy)
-                "language": None if self.language == "auto" else self.language,
-                "temperature": self.temperature,
-                "suppress_blank": self.suppress_blank,
-            }
-            
-            # Configuración de backend
+            # Configurar backend primero (antes de importar)
             if self._backend == "cuda":
                 os.environ["GGML_CUDA"] = "1"
             elif self._backend == "vulkan":
                 os.environ["GGML_VULKAN"] = "1"
             
-            # Configurar threads
-            if self.n_threads:
-                model_params["n_threads"] = self.n_threads
+            # Cargar modelo con parámetros básicos
+            self._model = Model(self.model_name)
             
-            # Estrategia de decodificación
-            if self.beam_search:
-                model_params["strategy"] = 1  # BeamSearchDecoder
-            else:
-                model_params["strategy"] = 0  # GreedyDecoder
-            
-            # Cargar modelo
-            self._model = Model(self.model_name, **model_params)
+            # Los parámetros se configuran durante la transcripción, no durante la carga
+            # La API nueva maneja esto diferente
             
             # Preparar prompt tokens si hay prompt
             if self.prompt:
@@ -185,17 +166,46 @@ class WhisperCppModel(BaseASRModel):
         try:
             # Preparar prompt para esta transcripción
             current_prompt = prompt or self.prompt
-            prompt_tokens = None
             
-            if current_prompt:
-                prompt_tokens = self._prepare_prompt_tokens(current_prompt)
-            
-            # Configurar parámetros para esta transcripción
+            # Preparar parámetros para transcripción
             transcribe_params = {}
             
-            if prompt_tokens:
-                transcribe_params["prompt_tokens"] = prompt_tokens
-                transcribe_params["prompt_n_tokens"] = len(prompt_tokens)
+            # Configurar parámetros básicos
+            transcribe_params["print_realtime"] = False
+            transcribe_params["print_progress"] = False
+            transcribe_params["print_special"] = False
+            transcribe_params["print_timestamps"] = False
+            transcribe_params["token_timestamps"] = False
+            
+            # Configurar idioma
+            if self.language != "auto":
+                transcribe_params["language"] = self.language
+            
+            transcribe_params["temperature"] = self.temperature
+            transcribe_params["suppress_blank"] = self.suppress_blank
+            
+            # Configurar threads
+            if self.n_threads:
+                transcribe_params["n_threads"] = self.n_threads
+            
+            # Configurar estrategia de decodificación
+            if self.beam_search:
+                transcribe_params["beam_search"] = {"beam_size": 5, "patience": 1}
+                transcribe_params["greedy"] = {"best_of": 1}
+            else:
+                transcribe_params["greedy"] = {"best_of": 5}
+                transcribe_params["beam_search"] = {"beam_size": -1, "patience": -1}
+            
+            # Configurar prompt
+            if current_prompt:
+                try:
+                    from pywhispercpp.utils import tokenize_text
+                    prompt_tokens = tokenize_text(current_prompt)
+                    transcribe_params["prompt_tokens"] = prompt_tokens
+                    transcribe_params["prompt_n_tokens"] = len(prompt_tokens)
+                except ImportError:
+                    # Si no hay tokenización, usar como texto inicial
+                    transcribe_params["initial_prompt"] = current_prompt
             
             # Realizar transcripción
             segments = self._model.transcribe(str(audio_path), **transcribe_params)
