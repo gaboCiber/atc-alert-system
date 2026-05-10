@@ -49,6 +49,42 @@ Sistema de detección de violaciones de seguridad en tiempo real para control de
 - `pipeline.py`: AlertPipeline principal
 - `pipeline_state.py`: Estado del pipeline (commits, rollbacks)
 
+### 2. Compilation System (`compilation/`)
+
+**Sistema de compilación de reglas KEX a código Python evaluador usando LLM con Instructor.**
+
+**RuleCompiler**: Compilador principal que utiliza LLM para generar código Python evaluador de reglas ATC.
+
+**Características Principales:**
+- **Migración a Instructor**: Usa Instructor para manejo automático de reintentos y validación JSON schema
+- **Validación Integrada**: Los modelos Pydantic incluyen validadores para sintaxis, imports prohibidos, estructura de retorno
+- **Clasificación Inteligente**: Determina si una regla es compilable con TrafficState o requiere juicio subjetivo
+- **Generación de Código**: Produce funciones `evaluate()` que operan sobre objetos TrafficState
+- **Testing Automático**: Ejecuta código generado con TrafficState de prueba antes de aceptarlo
+
+**Flujo de Compilación:**
+1. **Clasificación**: Determina si la regla es objetivamente evaluablen con datos TrafficState
+2. **Generación con Instructor**: LLM genera código Python con validación automática via Pydantic
+3. **Validación Pydantic**: Verificación automática de sintaxis, imports prohibidos, estructura de retorno
+4. **Testing**: Ejecución del código generado con estado de prueba
+5. **Guardado**: Almacenamiento de reglas compiladas con metadata completa
+
+**Modelos Pydantic:**
+- `ClassificationResponse`: Respuesta estructurada para clasificación de reglas
+- `GeneratedCodeResponse`: Respuesta básica para generación de código
+- `ValidatedCodeResponse`: Respuesta con validación completa integrada (sintaxis, imports, estructura)
+- `CompiledRule`: Regla compilada lista para ejecución
+- `CompilationManifest`: Manifiesto de lote de compilación
+
+**Archivos:**
+- `compiler.py`: RuleCompiler principal con migración a Instructor
+- `schemas.py`: Modelos Pydantic para respuestas estructuradas
+- `validator.py`: Validación estática de código (legacy, parcialmente reemplazado por Pydantic)
+- `prompts.py`: Prompts optimizados para salida estructurada
+- `loader.py`: Cargador de reglas compiladas
+- `kex_data_processor.py`: Procesamiento de datos KEX con resolución de entidades
+- `compile_rules_cli.py`: CLI para compilación por lotes
+
 ### 2. Core (`core/`)
 
 **StateProjection**: Simulación "what-if" de instrucciones ATC.
@@ -163,6 +199,93 @@ if result.alerts:
         print(f"⚠️ {alert.severity}: {alert.message}")
 ```
 
+### Ejemplo: Compilación de Reglas KEX
+
+```bash
+# Compilar todas las reglas con configuración por defecto
+uv run python Alert_System/compile_rules_cli.py "Knowledge_Extractor/output/kex_data"
+
+# Compilar máximo 5 reglas con modelo específico
+uv run python Alert_System/compile_rules_cli.py "Knowledge_Extractor/output/kex_data" \
+  --max-rules 5 \
+  --model llama3.2 \
+  --provider ollama \
+  --output compiled_rules
+
+# Compilar con proveedor OpenAI
+uv run python Alert_System/compile_rules_cli.py "Knowledge_Extractor/output/kex_data" \
+  --model gpt-4 \
+  --provider openai \
+  --api-key tu-api-key
+```
+
+## CLI de Compilación
+
+### `compile_rules_cli.py`
+
+**Herramienta de línea de comandos para compilación por lotes de reglas KEX a código Python evaluador.**
+
+**Uso:**
+```bash
+compile_rules_cli.py [-h] [--output OUTPUT] [--max-rules MAX_RULES] \
+  [--model MODEL] [--provider PROVIDER] input_dir
+```
+
+**Argumentos:**
+- `input_dir`: Carpeta de entrada con archivos KEX (obligatorio)
+
+**Opciones:**
+- `-h, --help`: Muestra ayuda y sale
+- `-o OUTPUT, --output OUTPUT`: Carpeta de salida para reglas compiladas
+- `-n MAX_RULES, --max-rules MAX_RULES`: Número máximo de reglas a procesar (default: todas)
+- `-m MODEL, --model MODEL`: Modelo LLM a usar (default: llama3.2)
+- `-p PROVIDER, --provider PROVIDER`: Proveedor LLM (ollama, openai, etc.)
+
+**Características:**
+- **Resolución de Entidades**: Convierte IDs de entidades (E001, R002) a sus descripciones
+- **Clasificación Automática**: Determina si reglas son compilables con TrafficState
+- **Guardado Incremental**: Guarda cada regla exitosa inmediatamente
+- **Manifiesto**: Genera JSON con estadísticas de compilación
+- **Testing**: Ejecuta prueba básica de reglas compiladas
+
+**Ejemplo de Salida:**
+```
+🚀 Compilando reglas KEX...
+📁 Entrada: Knowledge_Extractor/output/data
+📁 Salida: compiled_rules
+🤖 Modelo: llama3.2 (ollama)
+📊 Máximo reglas: 5
+
+🔨 Compilando 5 reglas con guardado incremental...
+✅ RULE001: ALTITUDE - compiled successfully
+✅ RULE002: SEPARATION - compiled successfully
+🚫 RULE003: not_compilable - requiere juicio subjetivo
+
+📊 Resumen:
+  Compiled: 2
+  Not compilable: 1
+  Failed: 0
+  Total: 3
+```
+
+**Integración con RuleEngine:**
+Las reglas compiladas pueden ser cargadas automáticamente en el RuleEngine:
+
+```python
+from Alert_System.compilation.loader import CompiledRuleLoader
+from Alert_System.rule_engine.rule_engine import RuleEngine
+
+# Cargar reglas compiladas
+loader = CompiledRuleLoader(compiled_rules_dir="compiled_rules")
+manifest = loader.load_manifest()
+
+# Registrar en RuleEngine
+engine = RuleEngine()
+for rule_id, compiled_rule in manifest.rules.items():
+    if compiled_rule.compilation_status == CompilationStatus.COMPILED:
+        engine.register_evaluator(rule_id, compiled_rule.compiled_code)
+```
+
 ### Ejemplo: Integración con KEX
 
 ```python
@@ -251,6 +374,20 @@ Ver `requirements.txt` en el proyecto principal.
 
 ## Futuras Mejoras
 
+### Cambios Recientes Implementados
+
+✅ **Migración a Instructor (2025)**
+- Reemplazo de cliente raw por Instructor con manejo automático de reintentos
+- Validación integrada via modelos Pydantic con validadores automáticos
+- Eliminación de lógica manual de reintentos y parsing JSON
+- Mejor manejo de errores y logging
+
+✅ **CLI de Compilación (2025)**
+- Herramienta completa para compilación por lotes
+- Resolución automática de entidades a descripciones
+- Guardado incremental y manifiestos
+- Soporte para múltiples proveedores LLM
+
 ### Decisiones Pendientes
 
 1. **LLM en GenericKexCondition**
@@ -266,6 +403,11 @@ Ver `requirements.txt` en el proyecto principal.
    - Caching de proyecciones
    - Evaluación paralela de reglas
    - Optimización de StateProjector
+
+4. **Mejoras en Compilation System**
+   - Testing más exhaustivo de código generado
+   - Métricas de calidad de compilación
+   - Optimización de prompts para mejores resultados
 
 ## Contacto
 
