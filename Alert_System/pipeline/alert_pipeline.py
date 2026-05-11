@@ -112,6 +112,11 @@ class AlertPipeline:
         self,
         state_manager: StateManager,
         rule_engine: RuleEngine,
+        llm_config: Any = None,
+        rule_filter: Any = None,
+        filter_timeout: float = 0.0,
+        filter_top_k: int = 30,
+        verbose: bool = False,
     ):
         """
         Inicializa el pipeline.
@@ -119,10 +124,20 @@ class AlertPipeline:
         Args:
             state_manager: Gestor de estado con soporte commit/rollback
             rule_engine: Motor de reglas para evaluación
+            llm_config: Configuración del LLM para evaluación de reglas genéricas
+            rule_filter: Instancia de RuleFilter para prefiltrado de reglas
+            filter_timeout: Tiempo máximo para prefiltrado (0 = ilimitado)
+            filter_top_k: Número máximo de reglas a mantener tras re-rank de embeddings
+            verbose: Si se muestra debug del prefiltrado
         """
         self.state_manager = state_manager
         self.rule_engine = rule_engine
         self.state_projector = StateProjector()
+        self.llm_config = llm_config
+        self.rule_filter = rule_filter
+        self.filter_timeout = filter_timeout
+        self.filter_top_k = filter_top_k
+        self.verbose = verbose
     
     def load_kex_rules(self, rules: List[Any]) -> int:
         """
@@ -367,6 +382,10 @@ class AlertPipeline:
             )
             violations.extend(
                 self._evaluate_runway_rules(parsed, projected, callsign)
+            )
+            # Evaluar reglas compiladas y genéricas registradas en el RuleEngine
+            violations.extend(
+                self._evaluate_compiled_rules(parsed, projected, callsign)
             )
             
             step.mark_success(violations)
@@ -683,6 +702,92 @@ class AlertPipeline:
                     },
                 ))
         
+        return violations
+    
+    def _evaluate_compiled_rules(
+        self,
+        parsed: ParsedInstruction,
+        projected: ProjectedState,
+        callsign: str,
+    ) -> List[Violation]:
+        """Evalúa reglas compiladas y genéricas registradas en el RuleEngine."""
+        violations = []
+
+        compiled_evaluators = []
+        generic_evaluators: Dict[str, Any] = {}
+
+        try:
+            for condition_type, evaluator in self.rule_engine._evaluator_instances.items():
+                if condition_type in ("ALTITUDE", "SEPARATION", "RUNWAY"):
+                    continue
+                if condition_type.startswith("COMPILED_"):
+                    compiled_evaluators.append((condition_type, evaluator))
+                elif condition_type.startswith("GENERIC_"):
+                    if hasattr(evaluator, "_executable_rule") and evaluator._executable_rule:
+                        generic_evaluators[condition_type] = evaluator
+        except Exception:
+            pass
+
+        # Evaluar compiladas directamente (siempre)
+        for condition_type, evaluator in compiled_evaluators:
+            try:
+                result = evaluator.evaluate(
+                    projected,
+                    parameters={},
+                    aircraft_callsign=callsign,
+                )
+                if not result.satisfied and result.violation:
+                    violations.append(result.violation)
+            except Exception:
+                pass
+
+        # Para genéricas, aplicar prefiltrado si hay RuleFilter
+        if generic_evaluators:
+            filtered_ids: Optional[Set[str]] = None
+            total_generic = len(generic_evaluators)
+            if self.rule_filter is not None and self.llm_config is not None:
+                try:
+                    self.rule_filter.config.verbose = self.verbose
+                    rules = [ev._executable_rule for ev in generic_evaluators.values()]
+                    raw_text = parsed.raw_text if parsed else ""
+                    if self.verbose:
+                        print(f"\n  [PIPELINE] Prefiltrando {total_generic} reglas genéricas para: '{raw_text}'", flush=True)
+                    filtered_rules = self.rule_filter.filter_rules(
+                        rules,
+                        instruction_text=raw_text,
+                        llm_config=self.llm_config,
+                        timeout_seconds=self.filter_timeout,
+                        top_k=self.filter_top_k,
+                    )
+                    filtered_ids = {r.source_rule_id for r in filtered_rules}
+                    if self.verbose:
+                        print(f"  [PIPELINE] Reglas genéricas a evaluar: {len(filtered_ids)} / {total_generic}", flush=True)
+                except Exception as e:
+                    if self.verbose:
+                        print(f"  [PIPELINE] Error en prefiltrado: {e}", flush=True)
+                    pass
+            elif self.verbose:
+                print(f"\n  [PIPELINE] Sin RuleFilter, evaluando todas las {total_generic} reglas genéricas", flush=True)
+
+            evaluated = 0
+            for condition_type, evaluator in generic_evaluators.items():
+                if filtered_ids is not None:
+                    if evaluator._executable_rule.source_rule_id not in filtered_ids:
+                        continue
+                evaluated += 1
+                try:
+                    result = evaluator.evaluate(
+                        projected,
+                        parameters={},
+                        aircraft_callsign=callsign,
+                    )
+                    if not result.satisfied and result.violation:
+                        violations.append(result.violation)
+                except Exception:
+                    pass
+            if self.verbose:
+                print(f"  [PIPELINE] Evaluadas {evaluated} reglas genéricas, {len(violations)} violaciones encontradas", flush=True)
+
         return violations
     
     def _simple_atc_parser(self, raw_instruction: str) -> ParsedInstruction:

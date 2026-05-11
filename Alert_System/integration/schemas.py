@@ -28,7 +28,7 @@ class ExecutableRule(BaseModel):
 
 class LLMEvaluationResult(BaseModel):
     """Resultado estructurado de evaluación LLM para reglas genéricas."""
-    
+
     is_violated: bool = Field(..., description="Si la regla está violada según el estado actual")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confianza en la evaluación (0-1)")
     explanation: str = Field(..., description="Explicación del razonamiento LLM")
@@ -39,3 +39,19 @@ class LLMEvaluationResult(BaseModel):
     extracted_values: Optional[Dict[str, Any]] = Field(
         default=None, description="Valores extraídos del estado para la evaluación"
     )
+
+
+class RuleRelevance(BaseModel):
+    """Resultado de relevancia de una regla para una instrucción."""
+
+    rule_index: int = Field(..., ge=0, description="Índice 0-based de la regla en la lista candidata")
+    is_relevant: bool = Field(..., description="Si la regla es relevante para la instrucción")
+    reason: str = Field(..., max_length=100, description="Breve justificación de por qué aplica o no")
+
+
+class RelevanceFilterResult(BaseModel):
+    """Resultado del filtro batch de relevancia vía LLM."""
+
+    relevances: List[RuleRelevance] = Field(..., description="Lista de relevancias por regla")
+    summary: str = Field(..., max_length=200, description="Resumen de cuántas reglas son relevantes")
+    relevant_count: int = Field(..., ge=0, description="Número total de reglas marcadas como relevantes")
