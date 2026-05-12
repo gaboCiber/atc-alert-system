@@ -33,6 +33,29 @@ class ATCCompactNormalizer:
             if first_word not in self.airline_to_icao:
                 self.airline_to_icao[first_word] = code
         
+        # Mapeos adicionales para variaciones comunes
+        self.airline_to_icao.update({
+            "american airline": "AAL",  # American Airlines
+            "american airlines": "AAL",
+            "united airline": "UAL",  # United Airlines  
+            "united airlines": "UAL",
+            "delta airline": "DAL",   # Delta Airlines
+            "delta airlines": "DAL",
+            "british airway": "BAW",  # British Airways
+            "british airways": "BAW",
+            "continental airline": "COA",  # Continental
+            "continental airlines": "COA",
+            "southwest airline": "SWA",   # Southwest
+            "southwest airlines": "SWA",
+            "jetblue": "JBU",  # JetBlue
+            "spirit airline": "NK",  # Spirit
+            "spirit airlines": "NK",
+            "frontier airline": "FFT",  # Frontier
+            "frontier airlines": "FFT",
+            "alaska airline": "ASA",  # Alaska
+            "alaska airlines": "ASA",
+        })
+        
         # Compilar patrones regex
         self._flight_level_pattern = re.compile(
             r'flight\s+level\s+((?:zero|one|two|three|four|five|six|seven|eight|nine|niner)\s*)+',

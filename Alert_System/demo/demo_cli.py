@@ -45,6 +45,8 @@ from Alert_System.rule_engine.engine import RuleEngine
 from Alert_System.demo.simple_parser import SimpleATCParser
 from Alert_System.demo.state_loader import TrafficStateLoader
 from Alert_System.demo.audio_recorder import AudioRecorder
+from Alert_System.integration.asr_adapter import ASRAdapter
+from ASR.transcription.base import TranscriptionResult
 from common.llm_client_factory import ModelConfig
 
 # Try importing KEX integration, gracefully handle missing
@@ -105,11 +107,14 @@ Comandos disponibles:
     undo                     Deshace último commit
 
   Voz y audio:
-    dict                     Grabar audio y transcribir con ASR
+    dict                     Grabar audio y transcribir con ASR robusto
     dict timed <segundos>    Grabar por N segundos y transcribir
     set asr_url <url>        Configurar URL de API ASR (default: http://localhost:8000)
     test audio               Probar grabación de audio
     test asr                 Probar conexión con API ASR
+    
+    NOTA: Usa ASRAdapter con ATCCompactNormalizer para reconocer
+    nombres completos de aerolíneas (ej: "American Airline 123" → "AAL123")
 
   Otros:
     help                     Muestra esta ayuda
@@ -164,6 +169,14 @@ class DemoCLI:
             print(f"⚠️ Error inicializando grabador de audio: {e}")
             print("   Los comandos de voz no estarán disponibles")
             self.recorder = None
+        
+        # Inicializar ASRAdapter para mejor parsing de transcripciones
+        try:
+            self.asr_adapter = ASRAdapter()
+        except Exception as e:
+            print(f"⚠️ Error inicializando ASRAdapter: {e}")
+            print("   Usando SimpleATCParser como fallback")
+            self.asr_adapter = None
 
         # Inicializar con estado por defecto o desde archivo
         if initial_state_path:
@@ -1019,7 +1032,7 @@ class DemoCLI:
             
             if transcription:
                 # Procesar como instrucción
-                print(f"\n🎯 Transcripción: '{transcription}'")
+                print(f"\n🎯 Transcripción: '{transcription.text}'")
                 self._process_transcribed_instruction(transcription)
             else:
                 print("[✗] No se pudo transcribir el audio")
@@ -1055,8 +1068,8 @@ class DemoCLI:
         else:
             print(f"[✗] Tipo de test desconocido: {test_type}")
 
-    def _transcribe_audio_file(self, audio_file: str) -> Optional[str]:
-        """Envía archivo de audio a API ASR y retorna transcripción."""
+    def _transcribe_audio_file(self, audio_file: str) -> Optional[TranscriptionResult]:
+        """Envía archivo de audio a API ASR y retorna TranscriptionResult."""
         try:
             with open(audio_file, 'rb') as f:
                 files = {'file': (os.path.basename(audio_file), f, 'audio/wav')}
@@ -1066,7 +1079,15 @@ class DemoCLI:
             if response.status_code == 200:
                 data = response.json()
                 if data.get('success'):
-                    return data.get('text', '').strip()
+                    # Crear TranscriptionResult desde respuesta API
+                    return TranscriptionResult(
+                        text=data.get('text', '').strip(),
+                        file_path=audio_file,
+                        model_name=data.get('model', 'whisperatc_v3'),
+                        confidence=data.get('confidence', None),
+                        duration=data.get('duration', None),
+                        metadata={"source": "api", "api_response": data}
+                    )
                 else:
                     print(f"[✗] Error en API: {data.get('error')}")
                     return None
@@ -1087,15 +1108,25 @@ class DemoCLI:
         except Exception:
             return False
 
-    def _process_transcribed_instruction(self, transcription: str):
-        """Procesa instrucción transcrita como si fuera comandada manualmente."""
+    def _process_transcribed_instruction(self, transcription: TranscriptionResult):
+        """Procesa instrucción transcrita usando ASRAdapter o fallback."""
         try:
-            # Usar el parser existente
-            instruction = self.parser.parse(transcription)
+            # Priorizar ASRAdapter para mejor parsing de voz
+            if self.asr_adapter is not None:
+                instruction = self.asr_adapter.adapt(transcription)
+                print(f"[i] Usando ASRAdapter robusto")
+            else:
+                # Fallback a SimpleATCParser
+                instruction = self.parser.parse(transcription.text)
+                print(f"[i] Usando SimpleATCParser (fallback)")
             
             print(f"[i] Callsign: {instruction.callsign}")
             print(f"[i] Tipo: {instruction.instruction_type}")
             print(f"[i] Parámetros: {instruction.parameters}")
+            
+            # Mostrar texto normalizado si usó ASRAdapter
+            if self.asr_adapter is not None and hasattr(instruction, 'normalized_text'):
+                print(f"[i] Normalizado: '{instruction.normalized_text}'")
             
             # Ejecutar pipeline
             print("[>] Ejecutando pipeline...")
@@ -1106,6 +1137,20 @@ class DemoCLI:
             
         except Exception as e:
             print(f"[✗] Error procesando instrucción: {e}")
+            # Intentar fallback si ASRAdapter falló
+            if self.asr_adapter is not None:
+                try:
+                    print(f"[i] Intentando fallback a SimpleATCParser...")
+                    instruction = self.parser.parse(transcription.text)
+                    print(f"[i] Callsign: {instruction.callsign}")
+                    print(f"[i] Tipo: {instruction.instruction_type}")
+                    print(f"[i] Parámetros: {instruction.parameters}")
+                    
+                    print("[>] Ejecutando pipeline con fallback...")
+                    self.last_result = self.pipeline.process_instruction(instruction)
+                    self._display_pipeline_result(self.last_result)
+                except Exception as fallback_e:
+                    print(f"[✗] Fallback también falló: {fallback_e}")
 
     def _display_pipeline_result(self, result):
         """Muestra resultado del pipeline de forma similar al comando 'instr'."""

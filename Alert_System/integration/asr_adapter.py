@@ -21,6 +21,9 @@ from Alert_System.models.instruction import (
 )
 from Alert_System.integration.atc_compact_normalizer import ATCCompactNormalizer, normalize_to_compact
 
+# ASR imports
+from ASR.normalization.text_normalizer import ATCTextNormalizer
+
 
 @dataclass
 class TranscriptionContext:
@@ -39,7 +42,7 @@ class ASRAdapter:
     
     Responsabilidades:
     1. Recibir TranscriptionResult del ASR
-    2. Normalizar texto ATC
+    2. Normalizar texto ATC (expandido → compacto)
     3. Extraer callsign, tipo de instrucción, parámetros
     4. Crear ParsedInstruction para el pipeline
     """
@@ -52,6 +55,16 @@ class ASRAdapter:
             normalizer: Normalizador compacto opcional
         """
         self.normalizer = normalizer or ATCCompactNormalizer()
+        self.asr_normalizer = ATCTextNormalizer(
+            expand_callsigns=True,
+            expand_numbers=True,
+            expand_icao=False,
+            normalize_terminology=True,
+            remove_punctuation=True,
+            lowercase=True,
+            convert_compound_numbers=True,
+            split_concatenated_terms=True
+        )
         
         # Mapeo de verbos a tipos de instrucción
         self._verb_to_instruction_type = {
@@ -77,18 +90,21 @@ class ASRAdapter:
             
             # Clearance (no CLEARED_DIRECT, usando TAKEOFF_CLEARANCE como genérico)
             "cleared": InstructionType.TAKEOFF_CLEARANCE,
+            "cleared for": InstructionType.TAKEOFF_CLEARANCE,
+            "cleared for takeoff": InstructionType.TAKEOFF_CLEARANCE,
+            "cleared for take off": InstructionType.TAKEOFF_CLEARANCE,
             "proceed": InstructionType.TAKEOFF_CLEARANCE,
             "direct": InstructionType.TAKEOFF_CLEARANCE,
             
             # Approach/Landing
             "approach": InstructionType.APPROACH_CLEARANCE,
+            "contact approach": InstructionType.APPROACH_CLEARANCE,
             "land": InstructionType.LANDING_CLEARANCE,
             "cleared to land": InstructionType.LANDING_CLEARANCE,
             
             # Takeoff
             "takeoff": InstructionType.TAKEOFF_CLEARANCE,
             "take off": InstructionType.TAKEOFF_CLEARANCE,
-            "cleared for takeoff": InstructionType.TAKEOFF_CLEARANCE,
             
             # Hold
             "hold": InstructionType.HOLD_POSITION,
@@ -100,8 +116,9 @@ class ASRAdapter:
         }
         
         # Patrones regex para extracción
+        # Pattern mejorado: busca callsigns al inicio del texto o después de aerolínea
         self._callsign_pattern = re.compile(
-            r'\b([A-Z]{2,3}\d{1,4}[A-Z]?)\b|\b([A-Z]{3}\d{1,3})\b',
+            r'^([A-Z]{2,3}\d{1,4}[A-Z]?)\b|\b([A-Z]{3}\d{1,3})\b(?!\s*(?:fl|hdg|rwy))',
             re.IGNORECASE
         )
         self._altitude_pattern = re.compile(
@@ -134,22 +151,25 @@ class ASRAdapter:
         """
         raw_text = transcription.text
         
-        # Normalizar texto a formato compacto ATC
-        normalized_text = self.normalizer.normalize(raw_text)
+        # Paso 1: Normalizar con ASR (expande números y términos ATC)
+        asr_normalized = self.asr_normalizer.normalize(raw_text)
         
-        # Extraer callsign del texto normalizado (formato AAL123)
-        callsign = self._extract_callsign(normalized_text)
+        # Paso 2: Convertir a formato compacto (números → dígitos, aerolíneas → códigos)
+        compact_text = self.normalizer.normalize(asr_normalized)
+        
+        # Extraer callsign del texto compacto (formato AAL123)
+        callsign = self._extract_callsign(compact_text)
         
         # Detectar tipo de instrucción
-        instruction_type, action_verb = self._detect_instruction_type(normalized_text)
+        instruction_type, action_verb = self._detect_instruction_type(compact_text)
         
         # Extraer parámetros
-        parameters = self._extract_parameters(normalized_text, instruction_type)
+        parameters = self._extract_parameters(compact_text, instruction_type)
         
         # Crear contexto
         context = TranscriptionContext(
             raw_text=raw_text,
-            normalized_text=normalized_text,
+            normalized_text=compact_text,
             confidence=transcription.confidence,
             timestamp=datetime.utcnow(),
             model_name=transcription.model_name,
@@ -158,7 +178,7 @@ class ASRAdapter:
         
         return ParsedInstruction(
             raw_text=raw_text,
-            normalized_text=normalized_text,
+            normalized_text=compact_text,
             speaker=speaker,
             callsign=callsign,
             instruction_type=instruction_type,
@@ -168,6 +188,7 @@ class ASRAdapter:
                 "asr_model": transcription.model_name,
                 "confidence": transcription.confidence,
                 "timestamp": context.timestamp.isoformat(),
+                "asr_normalized": asr_normalized,
             },
         )
     
@@ -239,7 +260,7 @@ class ASRAdapter:
                 params["target_altitude"] = altitude
         
         # Heading
-        if instruction_type == InstructionType.HEADING:
+        if instruction_type in [InstructionType.HEADING, InstructionType.TURN_LEFT, InstructionType.TURN_RIGHT]:
             hdg_match = self._heading_pattern.search(text)
             if hdg_match:
                 params["heading"] = int(hdg_match.group(1))
@@ -254,9 +275,20 @@ class ASRAdapter:
         if rwy_match:
             params["runway"] = rwy_match.group(1).upper()
         
-        # Speed (extraer números de 3 dígitos que podrían ser velocidad)
-        speed_matches = re.findall(r'\b(\d{3})\s*knots?\b', text, re.IGNORECASE)
-        if speed_matches:
-            params["target_speed"] = int(speed_matches[0])
+        # Speed (mejorado para diferentes patrones)
+        if instruction_type in [InstructionType.SPEED, InstructionType.REDUCE_SPEED, InstructionType.INCREASE_SPEED]:
+            # Buscar "speed XXX" o "XXX knots"
+            speed_patterns = [
+                re.search(r'speed\s+(\d{3})', text, re.IGNORECASE),
+                re.search(r'(\d{3})\s*knots?', text, re.IGNORECASE),
+                re.search(r'maintain\s+speed\s+(\d{3})', text, re.IGNORECASE),
+                re.search(r'reduce\s+speed\s+to\s+(\d{3})', text, re.IGNORECASE),
+                re.search(r'increase\s+speed\s+to\s+(\d{3})', text, re.IGNORECASE),
+            ]
+            
+            for pattern_match in speed_patterns:
+                if pattern_match:
+                    params["target_speed"] = int(pattern_match.group(1))
+                    break
         
         return params
