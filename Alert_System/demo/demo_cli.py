@@ -17,6 +17,8 @@ import argparse
 import json
 import os
 import sys
+import requests
+import tempfile
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -42,6 +44,7 @@ from Alert_System.rule_engine.engine import RuleEngine
 
 from Alert_System.demo.simple_parser import SimpleATCParser
 from Alert_System.demo.state_loader import TrafficStateLoader
+from Alert_System.demo.audio_recorder import AudioRecorder
 from common.llm_client_factory import ModelConfig
 
 # Try importing KEX integration, gracefully handle missing
@@ -101,6 +104,13 @@ Comandos disponibles:
     rollback                 Rechaza cambio pendiente
     undo                     Deshace último commit
 
+  Voz y audio:
+    dict                     Grabar audio y transcribir con ASR
+    dict timed <segundos>    Grabar por N segundos y transcribir
+    set asr_url <url>        Configurar URL de API ASR (default: http://localhost:8000)
+    test audio               Probar grabación de audio
+    test asr                 Probar conexión con API ASR
+
   Otros:
     help                     Muestra esta ayuda
     clear                    Limpia la pantalla
@@ -145,6 +155,15 @@ class DemoCLI:
 
         # Historial de resultados
         self.last_result = None
+
+        # Configuración de API ASR
+        self.asr_api_url = "http://localhost:8000"
+        try:
+            self.recorder = AudioRecorder()
+        except Exception as e:
+            print(f"⚠️ Error inicializando grabador de audio: {e}")
+            print("   Los comandos de voz no estarán disponibles")
+            self.recorder = None
 
         # Inicializar con estado por defecto o desde archivo
         if initial_state_path:
@@ -260,6 +279,12 @@ class DemoCLI:
 
             elif cmd == "undo" or cmd == "u":
                 self._cmd_undo()
+
+            elif cmd == "dict":
+                self._cmd_dict(args)
+
+            elif cmd == "test":
+                self._cmd_test(args)
 
             else:
                 print(f"[✗] Comando desconocido: '{cmd}'. Escribe 'help' para ver opciones.")
@@ -652,6 +677,11 @@ class DemoCLI:
             print(f"[✓] Verbose: {'ON' if self.verbose else 'OFF'}")
             return
 
+        if key == "asr_url":
+            self.asr_api_url = value
+            print(f"[✓] URL de API ASR configurada: {value}")
+            return
+
         enabled = value.lower() in ("on", "true", "1", "yes")
 
         if key == "compiled":
@@ -956,6 +986,159 @@ class DemoCLI:
                 rw.operation_mode = RunwayOperationMode(kwargs.get("mode", kwargs.get("operation_mode")))
             except ValueError:
                 pass
+
+
+    # ------------------------------------------------------------------
+    # Comandos: Voz y Audio
+    # ------------------------------------------------------------------
+
+    def _cmd_dict(self, args: List[str]):
+        """Maneja comandos de dictado de voz."""
+        if self.recorder is None:
+            print("[✗] Grabador de audio no disponible. Revisa la configuración de audio.")
+            return
+        
+        try:
+            # Verificar si es timed
+            if len(args) >= 2 and args[0] == "timed":
+                try:
+                    duration = float(args[1])
+                    audio_file = self.recorder.record(duration=duration)
+                except ValueError:
+                    print("[✗] Duración inválida. Use: dict timed <segundos>")
+                    return
+            else:
+                # Grabación manual
+                audio_file = self.recorder.record()
+            
+            # Enviar a API ASR
+            transcription = self._transcribe_audio_file(audio_file)
+            
+            # Limpiar archivo temporal
+            AudioRecorder.cleanup(audio_file)
+            
+            if transcription:
+                # Procesar como instrucción
+                print(f"\n🎯 Transcripción: '{transcription}'")
+                self._process_transcribed_instruction(transcription)
+            else:
+                print("[✗] No se pudo transcribir el audio")
+                
+        except Exception as e:
+            print(f"[✗] Error en dictado: {e}")
+
+    def _cmd_test(self, args: List[str]):
+        """Maneja comandos de prueba."""
+        if not args:
+            print("[✗] Uso: test audio|asr")
+            return
+        
+        test_type = args[0].lower()
+        
+        if test_type == "audio":
+            if self.recorder is None:
+                print("[✗] Grabador de audio no disponible")
+                return
+            print("🧪 Probando grabación de audio...")
+            if AudioRecorder.test_recording():
+                print("[✓] Test de audio exitoso")
+            else:
+                print("[✗] Test de audio falló")
+        
+        elif test_type == "asr":
+            print("🧪 Probando conexión con API ASR...")
+            if self._test_asr_connection():
+                print("[✓] API ASR respondiendo correctamente")
+            else:
+                print("[✗] Error conectando con API ASR")
+        
+        else:
+            print(f"[✗] Tipo de test desconocido: {test_type}")
+
+    def _transcribe_audio_file(self, audio_file: str) -> Optional[str]:
+        """Envía archivo de audio a API ASR y retorna transcripción."""
+        try:
+            with open(audio_file, 'rb') as f:
+                files = {'file': (os.path.basename(audio_file), f, 'audio/wav')}
+                response = requests.post(f"{self.asr_api_url}/transcribe", 
+                                       files=files, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('success'):
+                    return data.get('text', '').strip()
+                else:
+                    print(f"[✗] Error en API: {data.get('error')}")
+                    return None
+            else:
+                print(f"[✗] Error HTTP {response.status_code}: {response.text}")
+                return None
+            
+        except requests.exceptions.RequestException as e:
+            print(f"[✗] Error de conexión con API ASR: {e}")
+            print(f"   Verifica que el contenedor esté corriendo en {self.asr_api_url}")
+            return None
+
+    def _test_asr_connection(self) -> bool:
+        """Prueba conexión con API ASR."""
+        try:
+            response = requests.get(f"{self.asr_api_url}/health", timeout=5)
+            return response.status_code == 200
+        except Exception:
+            return False
+
+    def _process_transcribed_instruction(self, transcription: str):
+        """Procesa instrucción transcrita como si fuera comandada manualmente."""
+        try:
+            # Usar el parser existente
+            instruction = self.parser.parse(transcription)
+            
+            print(f"[i] Callsign: {instruction.callsign}")
+            print(f"[i] Tipo: {instruction.instruction_type}")
+            print(f"[i] Parámetros: {instruction.parameters}")
+            
+            # Ejecutar pipeline
+            print("[>] Ejecutando pipeline...")
+            self.last_result = self.pipeline.process_instruction(instruction)
+            
+            # Mostrar resultados
+            self._display_pipeline_result(self.last_result)
+            
+        except Exception as e:
+            print(f"[✗] Error procesando instrucción: {e}")
+
+    def _display_pipeline_result(self, result):
+        """Muestra resultado del pipeline de forma similar al comando 'instr'."""
+        if result.projected_state:
+            print("\n--------------------------------------------------")
+            print("  ESTADO PROYECTADO:")
+            for callsign, aircraft in result.projected_state.aircrafts.items():
+                print(f"    {callsign}: ALT={aircraft.position.altitude} "
+                      f"HDG={aircraft.position.heading} SPD={aircraft.position.speed}")
+            print("--------------------------------------------------")
+        
+        if result.alerts_generated:
+            print(f"\n  ALERTAS GENERADAS: {len(result.alerts_generated)}")
+            for alert in result.alerts_generated:
+                severity_emoji = {
+                    "CRITICAL": "🔴",
+                    "HIGH": "🟠", 
+                    "MEDIUM": "🟡",
+                    "LOW": "🟢",
+                    "INFO": "🔵"
+                }.get(alert.severity.value, "⚪")
+                
+                print(f"    {severity_emoji} [{alert.severity.value}] {alert.alert_type}")
+                print(f"       {alert.message}")
+                if alert.suggestion:
+                    print(f"       Sugerencia: {alert.suggestion}")
+        
+        if hasattr(result, 'final_decision'):
+            decision_emoji = "COMMIT" if result.final_decision == "COMMIT" else "ROLLBACK"
+            print(f"\n  Decisión automática del sistema: {decision_emoji}")
+        
+        if hasattr(result, 'execution_time_ms'):
+            print(f"  Tiempo de ejecución: {result.execution_time_ms:.1f} ms")
 
 
 def main():
