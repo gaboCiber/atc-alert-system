@@ -27,6 +27,29 @@ class WakeTurbulenceCategory(str, Enum):
     SUPER = "S"
 
 
+class OccupantType(str, Enum):
+    """Tipo de ocupante de pista."""
+    AIRCRAFT = "aircraft"
+    VEHICLE = "vehicle"
+    UNKNOWN = "unknown"
+
+
+class PhaseTransition(BaseModel):
+    """Registro de transición de fase de vuelo."""
+    from_phase: FlightPhase
+    to_phase: FlightPhase
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    reason: Optional[str] = Field(None, description="Razón de la transición")
+
+
+class SquawkChange(BaseModel):
+    """Registro de cambio de squawk."""
+    from_squawk: Optional[str] = Field(None, description="Squawk anterior")
+    to_squawk: str = Field(..., description="Nuevo squawk")
+    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Timestamp del cambio")
+    changed_by: Optional[str] = Field(None, description="Quién inició el cambio: 'ATC' o 'PILOT'")
+
+
 class Position(BaseModel):
     """Posición geográfica y altimétrica de una aeronave."""
     latitude: float = Field(..., description="Latitud en grados")
@@ -77,6 +100,30 @@ class AircraftState(BaseModel):
         description="Últimas posiciones conocidas"
     )
 
+    # Historial de fase de vuelo (para RULE018, RULE019)
+    phase_history: List[PhaseTransition] = Field(
+        default_factory=list,
+        description="Historial de transiciones de fase con timestamps"
+    )
+    previous_phase: Optional[FlightPhase] = Field(
+        None,
+        description="Fase de vuelo anterior"
+    )
+    phase_transition_timestamp: Optional[datetime] = Field(
+        None,
+        description="Timestamp de la última transición de fase"
+    )
+
+    # Historial de squawk (para RULE030)
+    squawk_history: List[SquawkChange] = Field(
+        default_factory=list,
+        description="Historial de cambios de squawk con timestamps"
+    )
+    squawk_assigned_timestamp: Optional[datetime] = Field(
+        None,
+        description="Timestamp cuando se asignó el squawk actual"
+    )
+
     model_config = ConfigDict(
         json_encoders={
             datetime: lambda v: v.isoformat()
@@ -112,6 +159,12 @@ class RunwayState(BaseModel):
     # Restricciones
     closed_until: Optional[datetime] = Field(None)
     closure_reason: Optional[str] = Field(None)
+
+    # Tipo de ocupante (para RULE053 - detectar vehículos vs aeronaves)
+    occupant_type: Optional[OccupantType] = Field(
+        None,
+        description="Tipo de ocupante de la pista (AIRCRAFT, VEHICLE, UNKNOWN)"
+    )
 
 
 class TrafficState(BaseModel):

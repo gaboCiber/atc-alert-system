@@ -11,6 +11,23 @@ class FlightPhase(str, Enum):
     LANDING = "landing"
     TAXI = "taxi"
 
+class OccupantType(str, Enum):
+    AIRCRAFT = "aircraft"
+    VEHICLE = "vehicle"
+    UNKNOWN = "unknown"
+
+class PhaseTransition(BaseModel):
+    from_phase: FlightPhase
+    to_phase: FlightPhase
+    timestamp: datetime
+    reason: str|None
+
+class SquawkChange(BaseModel):
+    from_squawk: str|None
+    to_squawk: str
+    timestamp: datetime
+    changed_by: str|None  # "ATC" o "PILOT"
+
 class Position(BaseModel):
     latitude: float       # Latitud en grados
     longitude: float      # Longitud en grados
@@ -37,6 +54,12 @@ class AircraftState(BaseModel):
     aircraft_type: str|None
     is_emergency: bool
     emergency_type: str|None
+    # Nuevos campos para Fase 1:
+    phase_history: list[PhaseTransition]  # Historial de transiciones de fase
+    previous_phase: FlightPhase|None      # Fase anterior
+    phase_transition_timestamp: datetime|None
+    squawk_history: list[SquawkChange]    # Historial de cambios de squawk
+    squawk_assigned_timestamp: datetime|None
 
 class RunwayState(BaseModel):
     runway_id: str
@@ -47,6 +70,8 @@ class RunwayState(BaseModel):
     landing_queue: list[str]
     closed_until: str|None
     closure_reason: str|None
+    # Nuevo campo para Fase 1:
+    occupant_type: OccupantType|None  # AIRCRAFT, VEHICLE, UNKNOWN
 
 class TrafficState(BaseModel):
     timestamp: datetime
@@ -215,6 +240,33 @@ CLASSIFICATION_SYSTEM_PROMPT = """You are an ATC rule classifier. Your job is to
 ## TrafficState Available Fields
 
 ```python
+class FlightPhase(str, Enum):
+    GROUND = "ground"
+    TAKEOFF = "takeoff"
+    CLIMB = "climb"
+    CRUISE = "cruise"
+    DESCENT = "descent"
+    APPROACH = "approach"
+    LANDING = "landing"
+    TAXI = "taxi"
+
+class OccupantType(str, Enum):
+    AIRCRAFT = "aircraft"
+    VEHICLE = "vehicle"
+    UNKNOWN = "unknown"
+
+class PhaseTransition(BaseModel):
+    from_phase: FlightPhase
+    to_phase: FlightPhase
+    timestamp: datetime
+    reason: str|None
+
+class SquawkChange(BaseModel):
+    from_squawk: str|None
+    to_squawk: str
+    timestamp: datetime
+    changed_by: str|None  # "ATC" o "PILOT"
+
 class TrafficState:
     sector_id: str
     aircrafts: dict[str, AircraftState]  # indexed by callsign
@@ -233,6 +285,12 @@ class AircraftState:
     aircraft_type: str|None
     is_emergency: bool
     emergency_type: str|None
+    # Nuevos campos (Fase 1):
+    phase_history: list[PhaseTransition]  # Historial de transiciones de fase
+    previous_phase: FlightPhase|None      # Fase anterior
+    phase_transition_timestamp: datetime|None
+    squawk_history: list[SquawkChange]    # Historial de cambios de squawk
+    squawk_assigned_timestamp: datetime|None
 
 class RunwayState:
     runway_id: str
@@ -243,6 +301,8 @@ class RunwayState:
     landing_queue: list[str]
     closed_until: str|None
     closure_reason: str|None
+    # Nuevo campo (Fase 1):
+    occupant_type: OccupantType|None  # AIRCRAFT, VEHICLE, UNKNOWN
 
 # Available methods:
 # get_aircraft(callsign) -> AircraftState|None
