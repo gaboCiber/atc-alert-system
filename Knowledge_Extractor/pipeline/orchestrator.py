@@ -5,7 +5,7 @@ import json
 import glob
 import requests
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
 from ..config.settings import PipelineConfig
@@ -218,6 +218,7 @@ class KnowledgeExtractionPipeline:
         print(f"🚀 Starting extraction...\n")
         
         results = []
+        last_chunk = None  # Rastrear último chunk para contexto
         
         try:
             for page in pages:
@@ -242,10 +243,14 @@ class KnowledgeExtractionPipeline:
                     
                 if self.config.chunk_only:
                     # Chunk-only mode: extract and save chunks only, skip KEX
-                    page_results = self._process_page_chunks_only(page, doc_dir, total_pages)
+                    page_results, last_chunk = self._process_page_chunks_only(
+                        page, doc_dir, total_pages, last_chunk
+                    )
                 else:
                     # Normal mode: full processing with KEX
-                    page_results = self._process_page(page, doc_dir, total_pages)
+                    page_results, last_chunk = self._process_page(
+                        page, doc_dir, total_pages, last_chunk
+                    )
                 
                 results.extend(page_results)
                 self.state.processed_pages += 1
@@ -259,6 +264,12 @@ class KnowledgeExtractionPipeline:
                     print(f"🔢 Current IDs: {self.id_manager.get_all_ids()}")
                 
         finally:
+            # Manejo especial de última página
+            if last_chunk and page.number == total_pages:
+                # La última página procesó su último chunk, pero no hay siguiente página
+                # Este chunk queda sin procesar KEX (correcto - no hay página siguiente)
+                print(f"  ℹ️  Last page chunk not processed (no next page): {last_chunk[:50]}...")
+            
             print(f"\n{'='*60}")
             print(f"🏁 Processing complete!")
             print(f"📄 Pages processed: {self.state.processed_pages}/{total_pages}")
@@ -271,13 +282,18 @@ class KnowledgeExtractionPipeline:
         
         return results
     
-    def _extract_and_save_chunks(self, page: Page, output_dir: str) -> tuple:
+    def _extract_and_save_chunks(
+        self, 
+        page: Page, 
+        output_dir: str,
+        previous_page_last_chunk: Optional[str] = None,
+        exclude_last_chunk_from_save: bool = False
+    ) -> Tuple[List[str], Optional[str], str]:
         """
-        Extract chunks for a page (from external source or generate from PDF)
-        and save them to the output directory.
+        Extrae chunks con contexto opcional.
         
         Returns:
-            Tuple of (chunks, source_type) where source_type is "external" or "generated"
+            Tuple: (chunks_finales, ultimo_chunk_para_siguiente_pagina, source_type)
         """
         chunks = None
         is_generated = False
@@ -303,14 +319,29 @@ class KnowledgeExtractionPipeline:
                 
                 if sentences:
                     try:
-                        segmentation = self.sentence_extractor.segment(sentences)
-                        chunks = self.sentence_extractor.create_chunks(sentences, segmentation)
+                        # Siempre usar contexto si está disponible
+                        segmentation = self.sentence_extractor.segment_with_context(
+                            sentences=sentences,
+                            previous_page_chunk=previous_page_last_chunk
+                        )
+                        
+                        # Crear chunks finales
+                        chunks = self.sentence_extractor.create_chunks(
+                            sentences=sentences,
+                            segmentation=segmentation,
+                            previous_page_chunk=previous_page_last_chunk
+                        )
+                        
                         print(f"     └─ ✓ LLM created {len(chunks)} logical chunks")
+                        
                     except Exception as e:
                         # Fallback to NLTK sentence segmentation
-                        print(f"     ⚠️  LLM segmentation failed: {str(e)[:300]}...")
+                        print(f"     ⚠️  LLM segmentation failed: {str(e)}")
                         print(f"     🔄 Falling back to NLTK sentence segmentation...")
                         chunks = self.text_segmenter.segment(page.text)
+                        if previous_page_last_chunk:
+                            chunks = [previous_page_last_chunk] + chunks
+                            print(f"     └─ ✓ Added previous page chunk as context to fallback segmentation")
                         print(f"     └─ ✓ NLTK created {len(chunks)} sentence chunks")
                 else:
                     chunks = []
@@ -319,31 +350,64 @@ class KnowledgeExtractionPipeline:
                 chunks = [page.text]
                 print(f"     └─ Processing as single page unit")
         
+        # Decide whether this page should save the carried last chunk.
+        chunks_to_save = chunks
+        if exclude_last_chunk_from_save and chunks:
+            chunks_to_save = chunks[:-1]
+
         # Always save chunks to output directory (whether loaded or generated)
         self.file_utils.save_page_chunks(
-            output_dir, page.number, chunks, self.config.granularity
+            output_dir, page.number, chunks_to_save, self.config.granularity
         )
         source_type = "external" if (chunks_source and not is_generated) else "generated"
-        print(f"  💾 Saved {len(chunks)} {source_type} chunks to pagina_{page.number}_chunks.json")
+        print(f"  💾 Saved {len(chunks_to_save)} {source_type} chunks to pagina_{page.number}_chunks.json")
         
-        # Update chunk count in state
-        self.state.processed_chunks += len(chunks)
-        
-        return chunks, source_type
+        # Retornar último chunk para siguiente página
+        last_chunk = chunks[-1] if chunks else None
+        return chunks, last_chunk, source_type
     
-    def _process_page_chunks_only(self, page: Page, output_dir: str, total_pages: int) -> List[ExtractionResult]:
-        """Process page in chunk-only mode - extract and save chunks without KEX."""
-        chunks, source_type = self._extract_and_save_chunks(page, output_dir)
+    def _process_page_chunks_only(
+        self, 
+        page: Page, 
+        output_dir: str, 
+        total_pages: int,
+        previous_page_last_chunk: Optional[str] = None
+    ) -> Tuple[List[ExtractionResult], Optional[str]]:
+        """Chunk-only mode - retorna también el último chunk."""
+        is_last_page = page.number == total_pages
+        chunks, last_chunk, source_type = self._extract_and_save_chunks(
+            page, output_dir, previous_page_last_chunk,
+            exclude_last_chunk_from_save=not is_last_page
+        )
         
-        # Return empty list - no extraction performed in chunk-only mode
-        return []
+        # Return empty results, pero retorna último chunk
+        return [], last_chunk
     
-    def _process_page(self, page: Page, output_dir: str, total_pages: int) -> List[ExtractionResult]:
+    def _process_page(
+        self, 
+        page: Page, 
+        output_dir: str, 
+        total_pages: int,
+        previous_page_last_chunk: Optional[str] = None
+    ) -> Tuple[List[ExtractionResult], Optional[str]]:
         """Process a single page with full KEX extraction."""
         results = []
         
         # Extract and save chunks (handles both external and generated)
-        chunks, source_type = self._extract_and_save_chunks(page, output_dir)
+        is_last_page = page.number == total_pages
+        chunks, last_chunk, source_type = self._extract_and_save_chunks(
+            page,
+            output_dir,
+            previous_page_last_chunk,
+            exclude_last_chunk_from_save=not is_last_page
+        )
+        
+        # Determine which chunks to process
+        chunks_to_process = chunks if is_last_page else chunks[:-1]
+        
+        # Adjust last_chunk if not last page
+        if not is_last_page and chunks:
+            last_chunk = chunks[-1]
         
         # Build page data for output (only in full mode)
         page_data = {
@@ -355,9 +419,9 @@ class KnowledgeExtractionPipeline:
             "sentence_results": [],
         }
         
-        for chunk_idx, chunk_text in enumerate(chunks):
+        for chunk_idx, chunk_text in enumerate(chunks_to_process):
             # Progress indicator for chunks
-            progress = f"[{chunk_idx+1}/{len(chunks)}]"
+            progress = f"[{chunk_idx+1}/{len(chunks_to_process)}]"
             print(f"    {progress} Processing chunk {chunk_idx+1}...", end=" ")
             
             result = self._process_chunk(
@@ -445,7 +509,7 @@ class KnowledgeExtractionPipeline:
             error_file = save_errors_to_file(all_errors, output_dir, page.number)
             print(f"⚠️ Saved {len(all_errors)} errors to {error_file}")
         
-        return results
+        return results, last_chunk
     
     def _process_chunk(
         self, 

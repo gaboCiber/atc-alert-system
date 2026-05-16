@@ -102,6 +102,56 @@ Now process the following sentences. Return only valid JSON covering ALL sentenc
 """
 
 
+SENTENCE_SEGMENTATION_PROMPT_WITH_CONTEXT = """
+You are given a list of sentences from an aeronautical document.
+**IMPORTANT:** Sentence at index -1 is the LAST CHUNK from the PREVIOUS PAGE.
+It was NOT processed in its original page, so it MUST be included in this page's chunks.
+
+**CRITICAL RULES:**
+1. **FULL COVERAGE:** First chunk MUST start at -1. Last chunk MUST end at exactly {last_index}.
+2. **NO GAPS:** Every sentence from -1 to {last_index} must be included in exactly one chunk.
+3. **CONTIGUOUS RANGES:** Each chunk is [start, end] with start <= end.
+4. **NO OVERLAPS:** Chunks cannot share indices. If chunk 1 is [-1, 2], chunk 2 must start at 3.
+5. **ORDERED:** Chunks must appear in increasing order by start index.
+
+**VALIDATION CHECK:** After generating chunks, verify that:
+- First chunk starts at -1
+- Last chunk ends at {last_index}
+- No gaps between chunks
+- Total sentences covered: {total_sentences}
+- All indices from -1 to {last_index} are covered exactly once
+
+**VALID CHUNK PATTERNS:**
+- [-1, -1]: Context sentence alone (if it does not relate to sentence 0)
+- [-1, 0]: Context + first sentence (if they form one logical unit)
+- [-1, 4]: Context + multiple sentences (if the concept spans pages)
+- [0, 2]: No previous-page context in the first chunk of the current page
+
+**Output format:** A JSON object with a "chunks" array containing objects with "indices": [start, end].
+
+**Example with context (indices -1 to 3):**
+Input:
+{{
+  "-1": "...must maintain minimum",
+  "0": "separation of 1000 feet",
+  "1": "from other aircraft during final approach.",
+  "2": "This applies in controlled airspace.",
+  "3": "Do not reduce below minimum during turbulence."
+}}
+
+Valid output:
+{{
+  "chunks": [
+    {{"indices": [-1, 1]}},
+    {{"indices": [2, 2]}},
+    {{"indices": [3, 3]}}
+  ]
+}}
+
+**REMINDER:** You have {total_sentences} sentences total (indices -1 to {last_index}). Your output MUST cover exactly this range.
+"""
+
+
 def build_kex_prompt(
     text: str,
     context_entities: Optional[list] = None,

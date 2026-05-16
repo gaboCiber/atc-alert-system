@@ -94,7 +94,7 @@ class KEXExtractor:
         try:
             # Call LLM with Instructor (structured)
             response = self.client.chat.completions.create(
-                model=self.config.name,
+                **self.config.completion_kwargs(),
                 response_model=AeronauticalExtraction,
                 max_retries=self.config.max_retries,
                 messages=[
@@ -339,7 +339,7 @@ class KEXExtractor:
 
         try:
             response = self.client.chat.completions.create(
-                model=self.config.name,
+                **self.config.completion_kwargs(),
                 response_model=EntityExtraction,
                 max_retries=self.config.max_retries,
                 messages=[
@@ -386,7 +386,7 @@ class KEXExtractor:
 
         try:
             response = self.client.chat.completions.create(
-                model=self.config.name,
+                **self.config.completion_kwargs(),
                 response_model=RelationshipExtraction,
                 max_retries=self.config.max_retries,
                 messages=[
@@ -433,7 +433,7 @@ class KEXExtractor:
 
         try:
             response = self.client.chat.completions.create(
-                model=self.config.name,
+                **self.config.completion_kwargs(),
                 response_model=EventExtraction,
                 max_retries=self.config.max_retries,
                 messages=[
@@ -482,7 +482,7 @@ class KEXExtractor:
 
         try:
             response = self.client.chat.completions.create(
-                model=self.config.name,
+                **self.config.completion_kwargs(),
                 response_model=RuleExtraction,
                 max_retries=self.config.max_retries,
                 messages=[
@@ -533,7 +533,7 @@ class KEXExtractor:
 
         try:
             response = self.client.chat.completions.create(
-                model=self.config.name,
+                **self.config.completion_kwargs(),
                 response_model=ProcedureExtraction,
                 max_retries=self.config.max_retries,
                 messages=[

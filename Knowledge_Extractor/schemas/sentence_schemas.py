@@ -5,22 +5,27 @@ class LogicalChunk(BaseModel):
     """Representa un bloque lógico de oraciones contiguas."""
     indices: Tuple[int, int] = Field(
         ...,
-        description="Rango contiguo de índices [inicio, fin] (inclusive)"
+        description="Rango contiguo de índices [inicio, fin] (inclusive). Puede incluir -1 si es contexto de página anterior."
     )
     
     @field_validator('indices')
     @classmethod
     def validate_indices(cls, v: Tuple[int, int]) -> Tuple[int, int]:
-        """Valida que el rango sea válido (inicio <= fin)."""
+        """Valida que el rango sea válido (inicio <= fin). Permite -1 como índice especial."""
+        if v[0] < -1 or v[1] < -1:  # ← Permite -1 como índice válido
+            raise ValueError(f"Los índices deben ser >= -1")
         if v[0] > v[1]:
-            raise ValueError(f"El índice de inicio ({v[0]}) no puede ser mayor que el índice final ({v[1]})")
+            raise ValueError(f"Índice inicio ({v[0]}) > fin ({v[1]})")
         return v
     
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {"indices": [0, 4]},
-                {"indices": [5, 5]}
+                {"indices": [5, 5]},
+                {"indices": [-1, -1]},  # Contexto solo
+                {"indices": [-1, 0]},   # Contexto + primera oración
+                {"indices": [-1, 4]}    # Contexto extendido
             ]
         }
     }
@@ -36,46 +41,50 @@ class SegmentationOutput(BaseModel):
     @field_validator('chunks')
     @classmethod
     def validate_coverage_and_order(cls, v: List[LogicalChunk], info: ValidationInfo) -> List[LogicalChunk]:
-        """Valida que los chunks sean contiguos, no se solapen y cubran sin huecos."""
+        """Valida cobertura con soporte para índice -1."""
         if not v:
             return v
         
-        # Ordenar por inicio (por si acaso)
         sorted_chunks = sorted(v, key=lambda x: x.indices[0])
+        has_context = info.context.get("has_context", False) if info.context else False
+        first_actual_index = info.context.get("first_actual_index", 0) if info.context else 0
+        last_actual_index = info.context.get("last_actual_index", 0) if info.context else 0
         
-        # 1. Validar orden y solapamiento
-        prev_end = -1
+        # Validar primer chunk
+        first_chunk_start = sorted_chunks[0].indices[0]
+        if has_context:
+            # Si hay contexto, DEBE empezar en -1 (siempre disponible)
+            if first_chunk_start != -1:
+                raise ValueError(
+                    f"Con contexto, primer chunk DEBE empezar en -1, "
+                    f"pero empieza en {first_chunk_start}"
+                )
+        else:
+            # Sin contexto (primera página), debe empezar en 0
+            if first_chunk_start != 0:
+                raise ValueError(
+                    f"Sin contexto, primer chunk debe empezar en 0, "
+                    f"pero empieza en {first_chunk_start}"
+                )
+        
+        # Validar último chunk - SIEMPRE debe terminar en last_actual_index
+        last_chunk_end = sorted_chunks[-1].indices[1]
+        if last_chunk_end != last_actual_index:
+            raise ValueError(
+                f"Último chunk debe terminar en {last_actual_index}, "
+                f"pero termina en {last_chunk_end}"
+            )
+        
+        # Validar continuidad (sin gaps)
+        prev_end = -2 if has_context else -1  # Preparar para -1
         for chunk in sorted_chunks:
             start, end = chunk.indices
-            
-            if start <= prev_end:
-                raise ValueError(f"Chunks solapados o no ordenados: [{start}, {end}] se solapa con final anterior {prev_end}")
-            
-            if start > prev_end + 1:
-                raise ValueError(f"Hay un hueco entre chunks: final anterior {prev_end}, inicio actual {start}")
-            
+            if start != prev_end + 1:
+                raise ValueError(
+                    f"Gap detectado: después de {prev_end}, "
+                    f"siguiente empieza en {start}"
+                )
             prev_end = end
-        
-        # 2. Validar cobertura total con contexto
-        if info.context:
-            total_sentences = info.context.get("total_sentences")
-            if total_sentences is not None:
-                actual_last_index = sorted_chunks[-1].indices[1]
-                expected_last_index = total_sentences - 1
-                
-                if actual_last_index != expected_last_index:
-                    raise ValueError(
-                        f"La segmentación es incompleta. El último índice debe ser "
-                        f"{expected_last_index}, pero recibimos {actual_last_index}. "
-                        f"Faltan las líneas {actual_last_index + 1} a {expected_last_index}."
-                    )
-                
-                # Validar que empiece desde 0
-                first_index = sorted_chunks[0].indices[0]
-                if first_index != 0:
-                    raise ValueError(
-                        f"La segmentación debe empezar en el índice 0, pero empieza en {first_index}."
-                    )
         
         return sorted_chunks
     
@@ -86,6 +95,19 @@ class SegmentationOutput(BaseModel):
                     "chunks": [
                         {"indices": [0, 4]},
                         {"indices": [5, 5]}
+                    ]
+                },
+                {
+                    "chunks": [
+                        {"indices": [-1, -1]},  # Contexto solo
+                        {"indices": [0, 2]},    # Oraciones actuales
+                        {"indices": [3, 3]}
+                    ]
+                },
+                {
+                    "chunks": [
+                        {"indices": [-1, 0]},   # Contexto + primera
+                        {"indices": [1, 4]}     # Resto
                     ]
                 }
             ]
