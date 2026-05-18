@@ -121,12 +121,19 @@ CODE GENERATION RULES:
 10. Use `traffic_state.get_nearby_aircraft(callsign)` for separation checks.
 11. Use `TrafficState.calculate_distance(pos1, pos2)` for distance in NM.
 12. **CRITICAL**: Entity references (like E002, E015) represent CONCEPTS, not technical codes:
-   - E002 = "Standard Phraseology" → Check if communications follow proper patterns
-   - E015 = "RTF" → Check if radiotelephony is used appropriately
-   - NEVER match entity IDs directly (e.g., squawk == "E002")
-   - Generate code that evaluates the MEANING of these concepts
-13. Keep the function concise but correct. Prioritize correctness over brevity.
-14. The function MUST contain `def evaluate(` exactly as specified.
+    - E002 = "Standard Phraseology" → Check if communications follow proper patterns
+    - E015 = "RTF" → Check if radiotelephony is used appropriately
+    - NEVER match entity IDs directly (e.g., squawk == "E002")
+    - Generate code that evaluates the MEANING of these concepts
+13. **CRITICAL - NO HARDCODING**:
+    - NEVER hardcode specific callsigns (e.g., "Big Jet 345", "AAL123", "UAL456")
+    - NEVER hardcode specific runway IDs (e.g., "09L", "18", "27R")
+    - Use the `callsign` parameter or iterate over `traffic_state.aircrafts.values()`
+    - If the rule explicitly requires a specific entity (e.g., "Big Jet 345 must maintain squawk 3456"), use `.upper()` for normalization
+    - Example CORRECT: `target = traffic_state.get_aircraft(callsign.upper()) if callsign else None`
+    - Example WRONG: `if aircraft.callsign == "Big Jet 345":` (without .upper())
+14. Keep the function concise but correct. Prioritize correctness over brevity.
+15. The function MUST contain `def evaluate(` exactly as specified.
 
 SELF-VALIDATION CHECKLIST before responding:
 □ No syntax errors

@@ -33,9 +33,12 @@ from Alert_System.models.traffic_state import (
     AircraftState,
     Clearances,
     FlightPhase,
+    OccupantType,
+    PhaseTransition,
     Position,
     RunwayOperationMode,
     RunwayState,
+    SquawkChange,
     TrafficState,
     WakeTurbulenceCategory,
 )
@@ -86,6 +89,9 @@ Comandos disponibles:
     update aircraft <callsign> --altitude <ft> ...
     remove aircraft <callsign>
     remove runway <id>
+
+  Evaluación de estado (Fase 1):
+    eval state                Evalúa estado actual contra todas las reglas compiladas
 
   Simulación de instrucciones:
     instr <texto>            Parsea texto ATC y simula (ej: 'AAL123 climb to 5000')
@@ -274,6 +280,9 @@ class DemoCLI:
 
             elif cmd == "remove" or cmd == "rm" or cmd == "del":
                 self._cmd_remove(args)
+
+            elif cmd == "eval" or cmd == "eval_state":
+                self._cmd_eval_state(args)
 
             elif cmd in ("instr", "exec", "i", "e"):
                 self._cmd_instr(args, raw)
@@ -495,6 +504,79 @@ class DemoCLI:
 
         else:
             print(f"[✗] Tipo desconocido: '{entity_type}'")
+
+    # ------------------------------------------------------------------
+    # Comandos: Evaluación de Estado
+    # ------------------------------------------------------------------
+
+    def _cmd_eval_state(self, args: List[str]):
+        """Evalúa el estado actual contra todas las reglas compiladas cargadas."""
+        from Alert_System.rule_engine.conditions import ConditionResult
+
+        # Asegurar que las reglas compiladas estén cargadas
+        if not hasattr(self, 'use_compiled') or not self.use_compiled:
+            print("[i] Reglas compiladas deshabilitadas. Ejecutando 'set compiled on'...")
+            self.use_compiled = True
+            self._try_load_compiled_rules()
+
+        state = self.state_manager.current_state
+        print("\n" + "=" * 60)
+        print("EVALUACIÓN DE ESTADO ACTUAL")
+        print("=" * 60)
+        print(f"Sector: {state.sector_id}")
+        print(f"Aeronaves: {len(state.aircrafts)}")
+        print(f"Pistas: {len(state.runways)}")
+        print()
+
+        violations_found = []
+        rules_evaluated = 0
+
+        # Buscar evaluadores compilados en el RuleEngine
+        for condition_type, evaluator in self.rule_engine._evaluator_instances.items():
+            if not condition_type.startswith("COMPILED_"):
+                continue
+
+            rule_id = getattr(evaluator, 'condition_id', condition_type)
+            rules_evaluated += 1
+
+            print(f"Evaluando {rule_id}...")
+
+            # Evaluar para cada aeronave
+            for callsign in state.aircrafts.keys():
+                try:
+                    result = evaluator.evaluate(
+                        traffic_state=state,
+                        parameters={},
+                        aircraft_callsign=callsign
+                    )
+                    if not result.satisfied and result.violation:
+                        violations_found.append({
+                            'rule_id': rule_id,
+                            'callsign': callsign,
+                            'violation': result.violation
+                        })
+                        print(f"  ⚠️ VIOLACIÓN: {callsign} - {result.violation.explanation[:60]}...")
+                except Exception as e:
+                    print(f"  ✗ Error evaluando {rule_id} para {callsign}: {e}")
+
+        print()
+        print("-" * 60)
+        print(f"Resumen: {rules_evaluated} reglas evaluadas, {len(violations_found)} violaciones")
+
+        if violations_found:
+            print("\nVIOLACIONES DETECTADAS:")
+            print("-" * 40)
+            for v in violations_found:
+                severity_str = v['violation'].severity.value.upper()
+                print(f"[{severity_str}] {v['rule_id']} - {v['callsign']}")
+                print(f"  {v['violation'].explanation}")
+                if v['violation'].suggestion:
+                    print(f"  Sugerencia: {v['violation'].suggestion}")
+                print()
+        else:
+            print("[✓] No se detectaron violaciones")
+
+        print("=" * 60)
 
     # ------------------------------------------------------------------
     # Comandos: Simulación
@@ -925,6 +1007,15 @@ class DemoCLI:
         except ValueError:
             flight_phase = FlightPhase.CRUISE
 
+        # Previous phase (Fase 1)
+        prev_phase = None
+        prev_phase_str = kwargs.get("previous_phase", kwargs.get("prev_phase"))
+        if prev_phase_str:
+            try:
+                prev_phase = FlightPhase(prev_phase_str)
+            except ValueError:
+                pass
+
         wake_str = kwargs.get("wake", kwargs.get("wake_turbulence", "M"))
         try:
             wake_turbulence = WakeTurbulenceCategory(wake_str)
@@ -936,7 +1027,64 @@ class DemoCLI:
             heading_assigned=kwargs.get("heading_assigned", kwargs.get("clr_hdg", None)),
             runway_assigned=kwargs.get("runway_assigned", kwargs.get("clr_rw", None)),
             speed_assigned=kwargs.get("speed_assigned", kwargs.get("clr_spd", None)),
+            squawk=kwargs.get("squawk", kwargs.get("squawk_code", None)),
         )
+
+        # Phase history (Fase 1) - formato: --phase-history "from:descent,to:approach,reason:test"
+        phase_history = []
+        phase_history_str = kwargs.get("phase_history", kwargs.get("ph"))
+        if phase_history_str:
+            transitions = phase_history_str.split(";")  # Multiple transitions separated by ;
+            for trans in transitions:
+                parts = trans.split(",")
+                from_phase = None
+                to_phase = None
+                reason = None
+                for part in parts:
+                    if part.startswith("from:"):
+                        try:
+                            from_phase = FlightPhase(part[4:])
+                        except ValueError:
+                            pass
+                    elif part.startswith("to:"):
+                        try:
+                            to_phase = FlightPhase(part[3:])
+                        except ValueError:
+                            pass
+                    elif part.startswith("reason:"):
+                        reason = part[7:]
+                if from_phase and to_phase:
+                    phase_history.append(PhaseTransition(
+                        from_phase=from_phase,
+                        to_phase=to_phase,
+                        timestamp=datetime.utcnow(),
+                        reason=reason
+                    ))
+
+        # Squawk history (Fase 1) - formato: --squawk-history "from:1234,to:5678,by:ATC"
+        squawk_history = []
+        squawk_history_str = kwargs.get("squawk_history", kwargs.get("sqh"))
+        if squawk_history_str:
+            changes = squawk_history_str.split(";")  # Multiple changes separated by ;
+            for change in changes:
+                parts = change.split(",")
+                from_sq = None
+                to_sq = None
+                changed_by = None
+                for part in parts:
+                    if part.startswith("from:"):
+                        from_sq = part[5:]
+                    elif part.startswith("to:"):
+                        to_sq = part[3:]
+                    elif part.startswith("by:"):
+                        changed_by = part[3:]
+                if to_sq:
+                    squawk_history.append(SquawkChange(
+                        from_squawk=from_sq,
+                        to_squawk=to_sq,
+                        timestamp=datetime.utcnow(),
+                        changed_by=changed_by
+                    ))
 
         return AircraftState(
             callsign=callsign.upper(),
@@ -947,6 +1095,12 @@ class DemoCLI:
             wake_turbulence=wake_turbulence,
             aircraft_type=kwargs.get("aircraft_type", kwargs.get("type", None)),
             is_emergency=kwargs.get("emergency", kwargs.get("is_emergency", False)),
+            # Nuevos campos Fase 1
+            phase_history=phase_history,
+            previous_phase=prev_phase,
+            phase_transition_timestamp=datetime.utcnow() if prev_phase else None,
+            squawk_history=squawk_history,
+            squawk_assigned_timestamp=datetime.utcnow() if squawk_history else None,
         )
 
     def _build_runway_from_kwargs(self, runway_id: str, kwargs: Dict[str, Any]) -> RunwayState:
@@ -957,6 +1111,15 @@ class DemoCLI:
         except ValueError:
             operation_mode = RunwayOperationMode.MIXED
 
+        # Occupant type (Fase 1)
+        occupant_type = None
+        occupant_str = kwargs.get("occupant_type", kwargs.get("occupant"))
+        if occupant_str:
+            try:
+                occupant_type = OccupantType(occupant_str)
+            except ValueError:
+                pass
+
         return RunwayState(
             runway_id=runway_id.upper(),
             occupied=kwargs.get("occupied", False),
@@ -964,6 +1127,8 @@ class DemoCLI:
             operation_mode=operation_mode,
             holding_short=kwargs.get("holding_short", []),
             landing_queue=kwargs.get("landing_queue", []),
+            # Nuevo campo Fase 1
+            occupant_type=occupant_type,
         )
 
     def _update_aircraft(self, ac: AircraftState, kwargs: Dict[str, Any]):
@@ -988,6 +1153,31 @@ class DemoCLI:
         if "type" in kwargs or "aircraft_type" in kwargs:
             ac.aircraft_type = kwargs.get("aircraft_type", kwargs.get("type", ac.aircraft_type))
 
+        # Nuevos campos Fase 1
+        if "previous_phase" in kwargs or "prev_phase" in kwargs:
+            prev_phase_str = kwargs.get("previous_phase", kwargs.get("prev_phase"))
+            if prev_phase_str:
+                try:
+                    ac.previous_phase = FlightPhase(prev_phase_str)
+                    ac.phase_transition_timestamp = datetime.utcnow()
+                except ValueError:
+                    pass
+            else:
+                ac.previous_phase = None
+                ac.phase_transition_timestamp = None
+
+        if "squawk" in kwargs or "squawk_code" in kwargs:
+            new_squawk = kwargs.get("squawk", kwargs.get("squawk_code"))
+            if new_squawk and new_squawk != ac.clearances.squawk:
+                ac.squawk_history.append(SquawkChange(
+                    from_squawk=ac.clearances.squawk,
+                    to_squawk=new_squawk,
+                    timestamp=datetime.utcnow(),
+                    changed_by="CLI"
+                ))
+                ac.squawk_assigned_timestamp = datetime.utcnow()
+            ac.clearances.squawk = new_squawk
+
     def _update_runway(self, rw: RunwayState, kwargs: Dict[str, Any]):
         """Actualiza un RunwayState existente con kwargs."""
         if "occupied" in kwargs:
@@ -999,6 +1189,16 @@ class DemoCLI:
                 rw.operation_mode = RunwayOperationMode(kwargs.get("mode", kwargs.get("operation_mode")))
             except ValueError:
                 pass
+        # Nuevo campo Fase 1: occupant_type
+        if "occupant_type" in kwargs or "occupant" in kwargs:
+            occupant_str = kwargs.get("occupant_type", kwargs.get("occupant"))
+            if occupant_str:
+                try:
+                    rw.occupant_type = OccupantType(occupant_str)
+                except ValueError:
+                    pass
+            else:
+                rw.occupant_type = None
 
 
     # ------------------------------------------------------------------
