@@ -18,6 +18,12 @@ class ModelConfig:
     max_retries: int = 3
     timeout: int = 120
 
+    def completion_kwargs(self) -> dict:
+        """Build kwargs for Instructor create() based on provider behavior."""
+        if self.provider == "gemini":
+            return {}
+        return {"model": self.name}
+
 
 def create_instructor_client(config: ModelConfig) -> Tuple[Any, instructor.Mode]:
     """
@@ -72,9 +78,9 @@ def create_instructor_client(config: ModelConfig) -> Tuple[Any, instructor.Mode]
         )
         client = instructor.from_openai(
             openai_client,
-            mode=instructor.Mode.JSON_SCHEMA,
+            mode=instructor.Mode.MD_JSON,
         )
-        return client, instructor.Mode.JSON_SCHEMA
+        return client, instructor.Mode.MD_JSON
 
 
 def create_raw_client(config: ModelConfig) -> Optional[OpenAI]:

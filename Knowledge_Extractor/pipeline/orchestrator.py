@@ -351,8 +351,9 @@ class KnowledgeExtractionPipeline:
                 print(f"     └─ Processing as single page unit")
         
         # Decide whether this page should save the carried last chunk.
+        # Only exclude last chunk when chunks are generated (not from external source)
         chunks_to_save = chunks
-        if exclude_last_chunk_from_save and chunks:
+        if exclude_last_chunk_from_save and is_generated and chunks:
             chunks_to_save = chunks[:-1]
 
         # Always save chunks to output directory (whether loaded or generated)
