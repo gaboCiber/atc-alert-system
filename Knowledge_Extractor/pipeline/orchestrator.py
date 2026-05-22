@@ -297,6 +297,7 @@ class KnowledgeExtractionPipeline:
         """
         chunks = None
         is_generated = False
+        llm_fallback = False
         chunks_source = self.config.chunks_source_dir
         
         # Try to load chunks from external source first
@@ -336,6 +337,7 @@ class KnowledgeExtractionPipeline:
                         
                     except Exception as e:
                         # Fallback to NLTK sentence segmentation
+                        llm_fallback = True
                         print(f"     ⚠️  LLM segmentation failed: {str(e)}")
                         print(f"     🔄 Falling back to NLTK sentence segmentation...")
                         chunks = self.text_segmenter.segment(page.text)
@@ -359,7 +361,8 @@ class KnowledgeExtractionPipeline:
 
         # Always save chunks to output directory (whether loaded or generated)
         self.file_utils.save_page_chunks(
-            output_dir, page.number, chunks_to_save, self.config.granularity
+            output_dir, page.number, chunks_to_save, self.config.granularity,
+            llm_fallback=llm_fallback
         )
         source_type = "external" if (chunks_source and not is_generated) else "generated"
         print(f"  💾 Saved {len(chunks_to_save)} {source_type} chunks to pagina_{page.number}_chunks.json")

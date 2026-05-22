@@ -61,7 +61,8 @@ class FileUtils:
         output_dir: str,
         page_number: int,
         chunks: List[str],
-        granularity: str
+        granularity: str,
+        llm_fallback: bool = False
     ):
         """
         Save only the text chunks for a page (without NER results).
@@ -71,10 +72,12 @@ class FileUtils:
             page_number: Page number.
             chunks: List of text chunks.
             granularity: Segmentation granularity used.
+            llm_fallback: Whether LLM segmentation failed and NLTK was used instead.
         """
         data = {
             "page_number": page_number,
             "granularity": granularity,
+            "llm_fallback": llm_fallback,
             "total_chunks": len(chunks),
             "chunks": [
                 {
