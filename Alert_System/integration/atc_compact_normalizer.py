@@ -62,7 +62,8 @@ class ATCCompactNormalizer:
             re.IGNORECASE
         )
         self._runway_pattern = re.compile(
-            r'runway\s+((?:zero|one|two|three|four|five|six|seven|eight|nine)\s*)+',
+            r'runway\s+((?:zero|one|two|three|four|five|six|seven|eight|nine|niner)\s*)+'
+            r'(left|right|center|L|R|C)?\b',
             re.IGNORECASE
         )
         self._heading_pattern = re.compile(
@@ -127,14 +128,14 @@ class ATCCompactNormalizer:
             words = match.group(0)
             digits = []
             suffix = ""
-            for word in words.upper().split():
+            for word in words.lower().split():
                 if word in word_to_number:
                     digits.append(word_to_number[word])
-                elif word == 'LEFT' or word == 'L':
+                elif word in ('left', 'l'):
                     suffix = 'L'
-                elif word == 'RIGHT' or word == 'R':
+                elif word in ('right', 'r'):
                     suffix = 'R'
-                elif word == 'CENTER' or word == 'C':
+                elif word in ('center', 'c'):
                     suffix = 'C'
             if digits:
                 return f"RWY{''.join(digits)}{suffix}"

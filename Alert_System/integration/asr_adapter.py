@@ -20,9 +20,17 @@ from Alert_System.models.instruction import (
     Speaker,
 )
 from Alert_System.integration.atc_compact_normalizer import ATCCompactNormalizer, normalize_to_compact
+from Alert_System.integration.bert_atc_parser import BertATCParser
 
 # ASR imports
 from ASR.normalization.text_normalizer import ATCTextNormalizer
+
+# Mapa palabra->digito para extraccion de parametros desde formato expandido
+_WORD_TO_DIGIT = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    "niner": "9",
+}
 
 
 @dataclass
@@ -47,14 +55,22 @@ class ASRAdapter:
     4. Crear ParsedInstruction para el pipeline
     """
     
-    def __init__(self, normalizer: Optional[ATCCompactNormalizer] = None):
+    def __init__(
+        self,
+        normalizer: Optional[ATCCompactNormalizer] = None,
+        bert_parser: Optional[BertATCParser] = None,
+    ):
         """
         Inicializa el adaptador.
         
         Args:
             normalizer: Normalizador compacto opcional
+            bert_parser: Parser BERT NER opcional. Si se provee, se intenta
+                        usar primero para extraer entidades, con fallback a
+                        la logica regex tradicional.
         """
         self.normalizer = normalizer or ATCCompactNormalizer()
+        self.bert_parser = bert_parser
         self.asr_normalizer = ATCTextNormalizer(
             expand_callsigns=True,
             expand_numbers=True,
@@ -80,29 +96,31 @@ class ASRAdapter:
             "turn": InstructionType.HEADING,
             "heading": InstructionType.HEADING,
             "fly heading": InstructionType.HEADING,
+            "hdg": InstructionType.HEADING,
             "left": InstructionType.TURN_LEFT,
             "right": InstructionType.TURN_RIGHT,
             
-            # Speed
+            # Speed (compound forms before generic "speed")
+            "reduce speed": InstructionType.REDUCE_SPEED,
+            "increase speed": InstructionType.INCREASE_SPEED,
             "speed": InstructionType.SPEED,
             "reduce": InstructionType.REDUCE_SPEED,
             "increase": InstructionType.INCREASE_SPEED,
             
-            # Clearance (no CLEARED_DIRECT, usando TAKEOFF_CLEARANCE como genérico)
-            "cleared": InstructionType.TAKEOFF_CLEARANCE,
-            "cleared for": InstructionType.TAKEOFF_CLEARANCE,
-            "cleared for takeoff": InstructionType.TAKEOFF_CLEARANCE,
-            "cleared for take off": InstructionType.TAKEOFF_CLEARANCE,
-            "proceed": InstructionType.TAKEOFF_CLEARANCE,
-            "direct": InstructionType.TAKEOFF_CLEARANCE,
-            
-            # Approach/Landing
+            # Approach/Landing (must be before generic "cleared")
+            "cleared to land": InstructionType.LANDING_CLEARANCE,
+            "cleared for approach": InstructionType.APPROACH_CLEARANCE,
             "approach": InstructionType.APPROACH_CLEARANCE,
             "contact approach": InstructionType.APPROACH_CLEARANCE,
             "land": InstructionType.LANDING_CLEARANCE,
-            "cleared to land": InstructionType.LANDING_CLEARANCE,
             
-            # Takeoff
+            # Takeoff / generic clearance
+            "cleared for takeoff": InstructionType.TAKEOFF_CLEARANCE,
+            "cleared for take off": InstructionType.TAKEOFF_CLEARANCE,
+            "cleared for": InstructionType.TAKEOFF_CLEARANCE,
+            "cleared": InstructionType.TAKEOFF_CLEARANCE,
+            "proceed": InstructionType.TAKEOFF_CLEARANCE,
+            "direct": InstructionType.TAKEOFF_CLEARANCE,
             "takeoff": InstructionType.TAKEOFF_CLEARANCE,
             "take off": InstructionType.TAKEOFF_CLEARANCE,
             
@@ -129,8 +147,16 @@ class ASRAdapter:
             r'(?:heading|turn)\s*(?:left|right)?\s*(\d{3})',
             re.IGNORECASE
         )
+        self._heading_compact_pattern = re.compile(
+            r'HDG(\d{3})',
+            re.IGNORECASE
+        )
         self._runway_pattern = re.compile(
             r'(?:runway|rwy)\s*(\d{2}[LR]?)',
+            re.IGNORECASE
+        )
+        self._runway_compact_pattern = re.compile(
+            r'RWY(\d{2}[LR]?)',
             re.IGNORECASE
         )
     
@@ -142,6 +168,10 @@ class ASRAdapter:
         """
         Convierte TranscriptionResult a ParsedInstruction.
         
+        Pipeline:
+            1. Si hay BertATCParser configurado, intentar extraccion via BERT NER
+            2. Si BERT no esta disponible o falla, usar logica regex tradicional
+        
         Args:
             transcription: Resultado del ASR
             speaker: Quién habla (ATCO o PILOT)
@@ -151,22 +181,111 @@ class ASRAdapter:
         """
         raw_text = transcription.text
         
-        # Paso 1: Normalizar con ASR (expande números y términos ATC)
-        asr_normalized = self.asr_normalizer.normalize(raw_text)
+        # --- Rama 1: BERT NER (si esta configurado y disponible) ---
+        if self.bert_parser is not None:
+            parsed = self._adapt_with_bert(raw_text, speaker, transcription)
+            if parsed is not None:
+                return parsed
         
-        # Paso 2: Convertir a formato compacto (números → dígitos, aerolíneas → códigos)
+        # --- Rama 2: fallback regex tradicional ---
+        return self._adapt_fallback(raw_text, speaker, transcription)
+    
+    def _adapt_with_bert(
+        self,
+        raw_text: str,
+        speaker: Speaker,
+        transcription: TranscriptionResult,
+    ) -> Optional[ParsedInstruction]:
+        """
+        Intenta parsear usando BERT NER.
+        
+        Returns:
+            ParsedInstruction si BERT tuvo exito, None si falla (usa fallback)
+        """
+        result = self.bert_parser.parse(raw_text)
+        
+        if not result["success"]:
+            return None
+        
+        # Expandir y compactar texto completo (para metadata y params suplementarios)
+        asr_normalized = self.asr_normalizer.normalize(raw_text)
+        compact_full = self.normalizer.normalize(asr_normalized)
+        
+        # --- Callsign (ya compacto desde BertATCParser) ---
+        callsign = result["callsign"]
+        
+        # --- Instruction type desde command entity ---
+        command_text = result["command_entity"] or ""
+        instruction_type, action_verb = self._detect_instruction_type(command_text)
+        
+        # Si no se detecto tipo desde el command, intentar con texto completo
+        if instruction_type == InstructionType.UNKNOWN:
+            instruction_type, action_verb = self._detect_instruction_type(compact_full)
+        
+        # --- Parametros desde value entity ---
+        parameters: Dict[str, Any] = {}
+        
+        # 1. Intentar extraer desde value compact (formato "FL330", "RWY34L")
+        value_compact = result.get("value_compact")
+        if value_compact:
+            parameters = self._extract_parameters(value_compact, instruction_type)
+        
+        # 2. Suplementar con extraccion desde texto completo compacto
+        full_params = self._extract_parameters(compact_full, instruction_type)
+        for k, v in full_params.items():
+            if k not in parameters:
+                parameters[k] = v
+        
+        # 3. Si hay value entity expandido, intentar extraer tambien desde ahi
+        value_entity = result.get("value_entity")
+        if value_entity and not parameters:
+            expanded_params = self._extract_parameters_from_expanded(
+                value_entity, instruction_type
+            )
+            parameters.update(expanded_params)
+        
+        # --- Construir ParsedInstruction ---
+        return ParsedInstruction(
+            raw_text=raw_text,
+            normalized_text=compact_full,
+            speaker=speaker,
+            callsign=callsign,
+            instruction_type=instruction_type,
+            action_verb=action_verb,
+            parameters=parameters,
+            context={
+                "asr_model": transcription.model_name,
+                "confidence": transcription.confidence,
+                "timestamp": datetime.utcnow().isoformat(),
+                "asr_normalized": asr_normalized,
+                "bert_callsign_score": result["callsign_score"],
+                "bert_command_score": result["command_score"],
+                "bert_value_score": result["value_score"],
+                "bert_callsign_entity": result["callsign_entity"],
+                "bert_command_entity": result["command_entity"],
+                "bert_value_entity": result["value_entity"],
+            },
+        )
+    
+    def _adapt_fallback(
+        self,
+        raw_text: str,
+        speaker: Speaker,
+        transcription: TranscriptionResult,
+    ) -> ParsedInstruction:
+        """Parseo via regex tradicional (fallback cuando BERT no esta disponible)."""
+        asr_normalized = self.asr_normalizer.normalize(raw_text)
         compact_text = self.normalizer.normalize(asr_normalized)
         
-        # Extraer callsign del texto compacto (formato AAL123)
         callsign = self._extract_callsign(compact_text)
-        
-        # Detectar tipo de instrucción
         instruction_type, action_verb = self._detect_instruction_type(compact_text)
-        
-        # Extraer parámetros
         parameters = self._extract_parameters(compact_text, instruction_type)
+        if not parameters:
+            expanded_params = self._extract_parameters_from_expanded(
+                asr_normalized, instruction_type
+            )
+            parameters.update(expanded_params)
         
-        # Crear contexto
         context = TranscriptionContext(
             raw_text=raw_text,
             normalized_text=compact_text,
@@ -259,21 +378,30 @@ class ASRAdapter:
                     altitude = 0
                 params["target_altitude"] = altitude
         
-        # Heading
+        # Heading (formato expandido: heading 270, turn left 270)
         if instruction_type in [InstructionType.HEADING, InstructionType.TURN_LEFT, InstructionType.TURN_RIGHT]:
             hdg_match = self._heading_pattern.search(text)
             if hdg_match:
                 params["heading"] = int(hdg_match.group(1))
+            # Heading (formato compacto: HDG270)
+            hdg_compact = self._heading_compact_pattern.search(text)
+            if hdg_compact and "heading" not in params:
+                params["heading"] = int(hdg_compact.group(1))
             # Detectar dirección
             if "left" in text.lower():
                 params["direction"] = "left"
             elif "right" in text.lower():
                 params["direction"] = "right"
         
-        # Runway
+        # Runway (formato expandido: runway 34L, rwy 34L)
         rwy_match = self._runway_pattern.search(text)
         if rwy_match:
             params["runway"] = rwy_match.group(1).upper()
+        
+        # Runway (formato compacto: RWY34L, RWY30R)
+        rwy_compact = self._runway_compact_pattern.search(text)
+        if rwy_compact:
+            params["runway"] = rwy_compact.group(1).upper()
         
         # Speed (mejorado para diferentes patrones)
         if instruction_type in [InstructionType.SPEED, InstructionType.REDUCE_SPEED, InstructionType.INCREASE_SPEED]:
@@ -292,3 +420,137 @@ class ASRAdapter:
                     break
         
         return params
+    
+    def _extract_parameters_from_expanded(
+        self,
+        text: str,
+        instruction_type: InstructionType,
+    ) -> Dict[str, Any]:
+        """
+        Extrae parámetros desde texto en formato expandido (números como palabras).
+        
+        Útil cuando el value entity del BERT NER está en formato expandido
+        y no pasó por el compact normalizer.
+        
+        Ejemplos:
+            "flight level three three zero" -> target_altitude: 33000
+            "runway three four left" -> runway: "34L"
+            "heading two seven zero" -> heading: 270
+            "two five zero knots" -> target_speed: 250
+        """
+        params: Dict[str, Any] = {}
+        if not text:
+            return params
+        
+        text_lower = text.lower()
+        
+        # Altitud: "flight level X X X" o "flight level X X"
+        fl_match = re.search(
+            r"flight\s+level\s+("
+            r"(?:zero|one|two|three|four|five|six|seven|eight|nine|niner)"
+            r"(?:\s+(?:zero|one|two|three|four|five|six|seven|eight|nine|niner)){1,2}"
+            r")",
+            text_lower,
+        )
+        if fl_match:
+            digits = self._words_to_digits(fl_match.group(1))
+            if len(digits) in (2, 3):
+                params["flight_level"] = int(digits)
+                params["target_altitude"] = int(digits) * 100
+        
+        # Altitud directa: "X thousand feet" o solo numero
+        alt_match = re.search(
+            r"(\d+)\s*(?:thousand\s+)?feet",
+            text_lower,
+        )
+        if alt_match and "target_altitude" not in params:
+            altitude = int(alt_match.group(1))
+            if "thousand" in text_lower:
+                altitude *= 1000
+            params["target_altitude"] = altitude
+        
+        # Altitud desde digitos expandidos: "descend to three zero zero zero"
+        if "target_altitude" not in params:
+            alt_words = re.search(
+                r"(?:(?:descend|climb)\s+to|at|maintain|level)\s+("
+                r"(?:zero|one|two|three|four|five|six|seven|eight|nine|niner)"
+                r"(?:\s+(?:zero|one|two|three|four|five|six|seven|eight|nine|niner))+"
+                r")",
+                text_lower,
+            )
+            if alt_words:
+                digits = self._words_to_digits(alt_words.group(1))
+                if digits and len(digits) >= 3:
+                    params["target_altitude"] = int(digits)
+        
+        # Runway: "runway X X left/right" o "runway X X"
+        rwy_match = re.search(r"runway\s+(.+)", text_lower)
+        if rwy_match:
+            rwy_text = rwy_match.group(1)
+            digits = self._words_to_digits(rwy_text)
+            # Detectar left/right
+            suffix = ""
+            if "left" in rwy_text:
+                suffix = "L"
+            elif "right" in rwy_text:
+                suffix = "R"
+            if digits:
+                params["runway"] = f"{digits}{suffix}"
+        
+        # Heading: "heading X X X"
+        hdg_match = re.search(
+            r"heading\s+("
+            r"(?:zero|one|two|three|four|five|six|seven|eight|nine|niner)"
+            r"(?:\s+(?:zero|one|two|three|four|five|six|seven|eight|nine|niner)){2}"
+            r")",
+            text_lower,
+        )
+        if hdg_match:
+            digits = self._words_to_digits(hdg_match.group(1))
+            if len(digits) == 3:
+                params["heading"] = int(digits)
+        
+        # Speed: "X knots", "speed X X X"
+        spd_match = re.search(r"(\d+)\s*knots?", text_lower)
+        if spd_match:
+            params["target_speed"] = int(spd_match.group(1))
+        
+        # Speed en palabras: "two five zero knots"
+        spd_word_match = re.search(
+            r"("
+            r"(?:zero|one|two|three|four|five|six|seven|eight|nine|niner)"
+            r"(?:\s+(?:zero|one|two|three|four|five|six|seven|eight|nine|niner)){1,2}"
+            r")\s*knots?",
+            text_lower,
+        )
+        if spd_word_match and "target_speed" not in params:
+            digits = self._words_to_digits(spd_word_match.group(1))
+            if digits:
+                params["target_speed"] = int(digits)
+        
+        # Speed en palabras sin "knots": "speed two eight zero"
+        if "target_speed" not in params:
+            spd_plain = re.search(
+                r"(?:speed|reduce speed to|increase speed to)\s+("
+                r"(?:zero|one|two|three|four|five|six|seven|eight|nine|niner)"
+                r"(?:\s+(?:zero|one|two|three|four|five|six|seven|eight|nine|niner)){1,2}"
+                r")",
+                text_lower,
+            )
+            if spd_plain:
+                digits = self._words_to_digits(spd_plain.group(1))
+                if digits:
+                    params["target_speed"] = int(digits)
+        
+        return params
+    
+    @staticmethod
+    def _words_to_digits(text: str) -> str:
+        """Convierte palabras numericas a digitos. Ej: 'three four zero' -> '340'."""
+        digits = []
+        for word in text.split():
+            word_clean = word.strip().rstrip(".,")
+            digit = _WORD_TO_DIGIT.get(word_clean)
+            if digit is not None:
+                digits.append(digit)
+        return "".join(digits)
