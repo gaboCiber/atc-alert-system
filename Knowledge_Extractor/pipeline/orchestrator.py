@@ -352,8 +352,9 @@ class KnowledgeExtractionPipeline:
         
         # Decide whether this page should save the carried last chunk.
         # Only exclude last chunk when chunks are generated (not from external source)
+        # and there are 2+ chunks (never exclude the only chunk on a page)
         chunks_to_save = chunks
-        if exclude_last_chunk_from_save and is_generated and chunks:
+        if exclude_last_chunk_from_save and is_generated and len(chunks) > 1:
             chunks_to_save = chunks[:-1]
 
         # Always save chunks to output directory (whether loaded or generated)
@@ -404,11 +405,16 @@ class KnowledgeExtractionPipeline:
         )
         
         # Determine which chunks to process
-        chunks_to_process = chunks if is_last_page else chunks[:-1]
-        
-        # Adjust last_chunk if not last page
-        if not is_last_page and chunks:
-            last_chunk = chunks[-1]
+        # When using external chunks, process ALL (they already have correct boundaries)
+        if self.config.chunks_source_dir:
+            chunks_to_process = chunks
+            last_chunk = None  # No cross-page context needed for external chunks
+        else:
+            chunks_to_process = chunks if is_last_page else chunks[:-1]
+            
+            # Adjust last_chunk if not last page
+            if not is_last_page and chunks:
+                last_chunk = chunks[-1]
         
         # Build page data for output (only in full mode)
         page_data = {
