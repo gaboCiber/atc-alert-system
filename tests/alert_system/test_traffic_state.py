@@ -353,3 +353,195 @@ class TestWakeTurbulence:
         assert WakeTurbulenceCategory.MEDIUM == "M"
         assert WakeTurbulenceCategory.HEAVY == "H"
         assert WakeTurbulenceCategory.SUPER == "S"
+
+
+class TestNewModelsPhase1:
+    """Tests para los nuevos modelos agregados en Fase 1."""
+
+    def test_occupant_type_values(self):
+        """Valores del enum OccupantType."""
+        from Alert_System.models.traffic_state import OccupantType
+        assert OccupantType.AIRCRAFT == "aircraft"
+        assert OccupantType.VEHICLE == "vehicle"
+        assert OccupantType.UNKNOWN == "unknown"
+
+    def test_phase_transition_creation(self):
+        """Crear PhaseTransition válido."""
+        from Alert_System.models.traffic_state import PhaseTransition
+        transition = PhaseTransition(
+            from_phase=FlightPhase.CLIMB,
+            to_phase=FlightPhase.CRUISE,
+            reason="Reached cruise altitude"
+        )
+        assert transition.from_phase == FlightPhase.CLIMB
+        assert transition.to_phase == FlightPhase.CRUISE
+        assert transition.reason == "Reached cruise altitude"
+        assert transition.timestamp is not None
+
+    def test_squawk_change_creation(self):
+        """Crear SquawkChange válido."""
+        from Alert_System.models.traffic_state import SquawkChange
+        change = SquawkChange(
+            from_squawk="1234",
+            to_squawk="5678",
+            changed_by="ATC"
+        )
+        assert change.from_squawk == "1234"
+        assert change.to_squawk == "5678"
+        assert change.changed_by == "ATC"
+        assert change.timestamp is not None
+
+    def test_squawk_change_without_from(self):
+        """SquawkChange sin from_squawk (nuevo squawk)."""
+        from Alert_System.models.traffic_state import SquawkChange
+        change = SquawkChange(
+            to_squawk="0000",
+            changed_by="PILOT"
+        )
+        assert change.from_squawk is None
+        assert change.to_squawk == "0000"
+
+    def test_aircraft_state_with_phase_history(self):
+        """AircraftState con campos de historial de fase."""
+        from Alert_System.models.traffic_state import PhaseTransition
+        pos = Position(
+            latitude=40.0,
+            longitude=-74.0,
+            altitude=10000,
+            heading=180,
+            speed=250
+        )
+        transition = PhaseTransition(
+            from_phase=FlightPhase.CLIMB,
+            to_phase=FlightPhase.CRUISE,
+            reason="Reached cruise"
+        )
+        aircraft = AircraftState(
+            callsign="TEST123",
+            position=pos,
+            flight_phase=FlightPhase.CRUISE,
+            phase_history=[transition],
+            previous_phase=FlightPhase.CLIMB,
+            phase_transition_timestamp=datetime.utcnow()
+        )
+        assert len(aircraft.phase_history) == 1
+        assert aircraft.previous_phase == FlightPhase.CLIMB
+        assert aircraft.phase_transition_timestamp is not None
+
+    def test_aircraft_state_with_squawk_history(self):
+        """AircraftState con historial de squawk."""
+        from Alert_System.models.traffic_state import SquawkChange
+        pos = Position(
+            latitude=40.0,
+            longitude=-74.0,
+            altitude=5000,
+            heading=270,
+            speed=180
+        )
+        squawk_change = SquawkChange(
+            from_squawk="2100",
+            to_squawk="3456",
+            changed_by="ATC"
+        )
+        aircraft = AircraftState(
+            callsign="TEST456",
+            position=pos,
+            flight_phase=FlightPhase.APPROACH,
+            squawk_history=[squawk_change],
+            squawk_assigned_timestamp=datetime.utcnow()
+        )
+        assert len(aircraft.squawk_history) == 1
+        assert aircraft.squawk_history[0].to_squawk == "3456"
+        assert aircraft.squawk_assigned_timestamp is not None
+
+    def test_aircraft_state_defaults_for_new_fields(self):
+        """AircraftState tiene defaults para los nuevos campos."""
+        pos = Position(
+            latitude=40.0,
+            longitude=-74.0,
+            altitude=10000,
+            heading=90,
+            speed=300
+        )
+        aircraft = AircraftState(
+            callsign="TEST789",
+            position=pos,
+            flight_phase=FlightPhase.CRUISE
+        )
+        assert aircraft.phase_history == []
+        assert aircraft.previous_phase is None
+        assert aircraft.phase_transition_timestamp is None
+        assert aircraft.squawk_history == []
+        assert aircraft.squawk_assigned_timestamp is None
+
+    def test_runway_state_with_occupant_type(self):
+        """RunwayState con occupant_type."""
+        from Alert_System.models.traffic_state import OccupantType
+        runway = RunwayState(
+            runway_id="09L",
+            occupied=True,
+            occupied_by="AAL123",
+            occupant_type=OccupantType.AIRCRAFT
+        )
+        assert runway.occupied is True
+        assert runway.occupant_type == OccupantType.AIRCRAFT
+
+    def test_runway_state_vehicle_occupant(self):
+        """RunwayState con vehículo como ocupante."""
+        from Alert_System.models.traffic_state import OccupantType
+        runway = RunwayState(
+            runway_id="27R",
+            occupied=True,
+            occupied_by="FIRE_TRUCK_1",
+            occupant_type=OccupantType.VEHICLE
+        )
+        assert runway.occupant_type == OccupantType.VEHICLE
+
+    def test_runway_state_defaults_for_occupant_type(self):
+        """RunwayState tiene default None para occupant_type."""
+        runway = RunwayState(
+            runway_id="18C",
+            occupied=False
+        )
+        assert runway.occupant_type is None
+
+    def test_traffic_state_with_new_fields(self):
+        """TrafficState con nuevos campos en AircraftState y RunwayState."""
+        from Alert_System.models.traffic_state import PhaseTransition, SquawkChange, OccupantType
+
+        pos = Position(
+            latitude=40.0,
+            longitude=-74.0,
+            altitude=8000,
+            heading=180,
+            speed=220
+        )
+        transition = PhaseTransition(
+            from_phase=FlightPhase.DESCENT,
+            to_phase=FlightPhase.APPROACH
+        )
+        aircraft = AircraftState(
+            callsign="AAL123",
+            position=pos,
+            flight_phase=FlightPhase.APPROACH,
+            phase_history=[transition],
+            previous_phase=FlightPhase.DESCENT
+        )
+
+        runway = RunwayState(
+            runway_id="09L",
+            occupied=True,
+            occupied_by="UAL456",
+            occupant_type=OccupantType.AIRCRAFT
+        )
+
+        traffic = TrafficState(
+            sector_id="K JFK",
+            aircrafts={"AAL123": aircraft},
+            runways={"09L": runway},
+            msa=3000
+        )
+
+        assert traffic.get_aircraft("AAL123") is not None
+        assert traffic.get_aircraft("AAL123").phase_history[0].to_phase == FlightPhase.APPROACH
+        assert traffic.get_runway("09L").occupant_type == OccupantType.AIRCRAFT

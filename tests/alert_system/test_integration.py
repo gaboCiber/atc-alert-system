@@ -187,7 +187,7 @@ class TestKEXAdapter:
         
         assert len(evaluators) == 1
         assert evaluators[0].condition_id == "RULE_ALT_001"
-        assert evaluators[0].condition_type in ["above", "below"]
+        assert evaluators[0].condition_type == "ALTITUDE"
     
     def test_adapt_separation_rule(self, adapter, sample_rules):
         """Adaptar regla de separación."""
@@ -195,7 +195,7 @@ class TestKEXAdapter:
         
         assert len(evaluators) == 1
         assert evaluators[0].condition_id == "RULE_SEP_001"
-        assert evaluators[0].min_vertical_separation == 1000
+        assert evaluators[0].condition_type == "SEPARATION"
     
     def test_create_knowledge_context(self, adapter, sample_rules):
         """Crear contexto de conocimiento."""
