@@ -61,9 +61,9 @@ def main():
     
     parser.add_argument(
         "--provider",
-        choices=["openai", "gemini", "anthropic"],
+        choices=["openai", "gemini", "anthropic", "openrouter"],
         default="openai",
-        help="LLM provider type (default: openai). Use 'gemini' for native Gemini API."
+        help="LLM provider type (default: openai). Use 'openrouter' for OpenRouter API."
     )
     
     parser.add_argument(

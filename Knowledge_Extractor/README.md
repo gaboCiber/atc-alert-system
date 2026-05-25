@@ -21,6 +21,9 @@ Extract aeronautical knowledge (entities, relationships, rules, procedures) from
 - **Retry Logging**: Track failed Instructor validation attempts in real-time
 - **Memory Management**: Automatic Ollama model unloading after processing
 - **Granular Processing**: Process by page, sentence, or logical chunks
+- **Cross-Page Context**: Carries the last chunk between pages for coherent LLM segmentation
+- **OpenRouter Provider**: Support for OpenRouter API with structured outputs
+- **LLM Fallback Flag**: When LLM segmentation fails, `"llm_fallback": true` is saved in chunks JSON
 
 ## Architecture
 
@@ -44,8 +47,13 @@ pip install -r requirements.txt
 ```
 
 Requirements:
-- Ollama running locally (default: http://localhost:11434)
 - Python 3.10+
+- An LLM provider:
+  - **Ollama** (default): Running locally at http://localhost:11434
+  - **OpenAI**: API key from platform.openai.com
+  - **OpenRouter**: API key from openrouter.ai
+  - **Gemini** (native): API key from aistudio.google.com
+  - **Anthropic**: API key from console.anthropic.com
 
 ## Usage
 
@@ -83,7 +91,12 @@ python -m Knowledge_Extractor document.pdf -m gemini-1.5-flash --base-url https:
 
 # Anthropic/Claude
 python -m Knowledge_Extractor document.pdf -m claude-3-sonnet-20240229 --provider anthropic --api-key $ANTHROPIC_API_KEY
+
+# OpenRouter (structured outputs via OPENROUTER_STRUCTURED_OUTPUTS)
+python -m Knowledge_Extractor document.pdf -m "openai/gpt-4o" --provider openrouter --base-url https://openrouter.ai/api/v1 --api-key $OPENROUTE_API_KEY
 ```
+
+**Note**: When using `--provider openrouter`, no default `base-url` is set — you must explicitly provide it. The SDK uses `OPENROUTER_STRUCTURED_OUTPUTS` mode for reliable structured extraction.
 
 **Note**: Install optional dependencies for native providers:
 ```bash
@@ -201,6 +214,21 @@ python -m Knowledge_Extractor document.pdf --margins 34 76 1 33
 | `sentence` | Split into individual sentences | Balanced speed/accuracy |
 | `chunk` | Group sentences into logical blocks with LLM | Complex documents with rules/procedures |
 
+#### Chunk Granularity: Cross-Page Context
+
+When using `-g chunk`, the LLM segments each page into logical blocks. To maintain
+coherence across page boundaries:
+
+- The **last chunk** of each page is carried as **context to the next page** — the LLM uses
+  this context via the `[-1, -1]` index convention in the segmentation prompt
+- The carried chunk is **excluded from save** (`pagina_N_chunks.json` saves `chunks[:-1]`),
+  except on the **last page** where all chunks are saved
+- Pages with only **1 chunk** still save it (not excluded — `len(chunks) > 1` guard)
+- **External chunks** (`--chunks-source`) bypass this mechanism entirely — they already
+  have correct boundaries so all are saved and processed
+- When LLM segmentation fails and falls back to NLTK, the flag `"llm_fallback": true`
+  is set in the chunks JSON
+
 ### Python API
 
 ```python
@@ -250,12 +278,15 @@ print(f"Accumulated {pipeline.context_manager.get_relationship_count()} relation
 
 ## Output Structure
 
-Each page generates a JSON file (`pagina_N.json`):
+Each page generates two types of output files:
+
+### Extraction Results (`pagina_N.json`)
 
 ```json
 {
   "texto_original": "...",
   "granularity": "sentence",
+  "chunks_source": "generated",
   "sentence_results": [
     {
       "chunk_text": "...",
@@ -277,11 +308,33 @@ Each page generates a JSON file (`pagina_N.json`):
 }
 ```
 
+### Chunks Only (`pagina_N_chunks.json`)
+
+Generated in chunk-only mode or alongside extraction results when using `-g chunk`:
+
+```json
+{
+  "page_number": 1,
+  "granularity": "chunk",
+  "llm_fallback": false,
+  "total_chunks": 4,
+  "chunks": [
+    {"chunk_index": 0, "text": "...", "char_count": 120},
+    {"chunk_index": 1, "text": "...", "char_count": 95},
+    {"chunk_index": 2, "text": "...", "char_count": 112}
+  ]
+}
+```
+
+**Note**: If `"llm_fallback": true`, the LLM segmentation failed and NLTK sentence
+splitting was used instead. If the page had 5 generated chunks, only 4 are saved
+here — the last chunk was carried as cross-page context to the next page.
+
 ## Configuration
 
 ### Model Settings
 - `name`: LLM model name (default: llama3.2)
-- `provider`: LLM provider type - "openai", "gemini", or "anthropic" (default: openai)
+- `provider`: LLM provider type - "openai", "gemini", "anthropic", or "openrouter" (default: openai)
 - `base_url`: API base URL for OpenAI-compatible providers (default: http://localhost:11434/v1 for Ollama)
 - `api_key`: API key for authentication (default: ollama)
 - `max_retries`: Retry attempts for failed extractions

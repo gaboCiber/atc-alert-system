@@ -12,7 +12,7 @@ from typing import Optional, Any, Tuple, Literal
 class ModelConfig:
     """Configuration for LLM models."""
     name: str = "llama3.2"
-    provider: Literal["openai", "gemini", "anthropic"] = "openai"
+    provider: Literal["openai", "gemini", "anthropic", "openrouter"] = "openai"
     base_url: str = "http://localhost:11434/v1"
     api_key: str = "ollama"
     max_retries: int = 3
@@ -66,6 +66,17 @@ def create_instructor_client(config: ModelConfig) -> Tuple[Any, instructor.Mode]
         )
         return client, instructor.Mode.ANTHROPIC_JSON
     
+    elif config.provider == "openrouter":
+        openai_client = OpenAI(
+            base_url=config.base_url or "https://openrouter.ai/api/v1",
+            api_key=config.api_key,
+        )
+        client = instructor.from_openai(
+            openai_client,
+            mode=instructor.Mode.OPENROUTER_STRUCTURED_OUTPUTS,
+        )
+        return client, instructor.Mode.OPENROUTER_STRUCTURED_OUTPUTS
+    
     else:  # openai (default) or ollama
         # Asegurar que el base_url tenga el formato correcto para Ollama
         base_url = config.base_url
@@ -103,6 +114,12 @@ def create_raw_client(config: ModelConfig) -> Optional[OpenAI]:
     
     elif config.provider == "anthropic":
         return None
+    
+    elif config.provider == "openrouter":
+        return OpenAI(
+            base_url=config.base_url or "https://openrouter.ai/api/v1",
+            api_key=config.api_key,
+        )
     
     else:  # openai or ollama
         # Asegurar que el base_url tenga el formato correcto para Ollama

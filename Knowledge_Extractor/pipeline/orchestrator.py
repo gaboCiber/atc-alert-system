@@ -753,7 +753,11 @@ class KnowledgeExtractionPipeline:
         """
         Release Ollama models from memory.
         Called automatically at the end of processing.
+        Only applies to Ollama provider (uses Ollama-specific API).
         """
+        if self.config.model.provider not in ("ollama",):
+            return
+        
         try:
             # Get the base URL without /v1 suffix
             base_url = self.config.model.base_url.replace("/v1", "")
