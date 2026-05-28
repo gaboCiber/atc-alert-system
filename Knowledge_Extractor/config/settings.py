@@ -2,7 +2,7 @@
 Centralized configuration for Knowledge Extractor.
 """
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, Literal
+from typing import Optional, Tuple, Literal, Union
 
 from common.llm_client_factory import ModelConfig
 
@@ -33,8 +33,8 @@ class EmbeddingConfig:
 @dataclass
 class ResumeConfig:
     """Configuration for resuming extraction from previous state."""
-    start_page: int = 1  # Page to start from (1-indexed)
-    final_page: Optional[int] = None  # Page to end at (inclusive), None = process all
+    start_page: float = 1.0  # Page to start from (1-indexed, supports sub-pages like 5.2)
+    final_page: Optional[float] = None  # Page to end at (inclusive), None = process all
     load_previous_entities: bool = True  # Load entities from previous runs
     previous_output_dir: Optional[str] = None  # Directory with previous results
 

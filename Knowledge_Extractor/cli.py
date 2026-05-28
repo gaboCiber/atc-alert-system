@@ -83,16 +83,16 @@ def main():
     # Resume options
     parser.add_argument(
         "--start-page",
-        type=int,
-        default=1,
-        help="Page to start processing from (1-indexed, default: 1)"
+        type=float,
+        default=1.0,
+        help="Page to start processing from (1-indexed, supports sub-pages like 5.2, default: 1)"
     )
     
     parser.add_argument(
         "--final-page",
-        type=int,
+        type=float,
         default=None,
-        help="Page to end processing at (inclusive). If not set, processes all remaining pages."
+        help="Page to end processing at (inclusive, supports sub-pages like 5.2). If not set, processes all remaining pages."
     )
     
     parser.add_argument(

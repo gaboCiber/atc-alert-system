@@ -14,7 +14,7 @@ except ImportError:
 @dataclass
 class Page:
     """Represents a page extracted from a PDF."""
-    number: int
+    number: float
     text: str
     metadata: dict = None
     

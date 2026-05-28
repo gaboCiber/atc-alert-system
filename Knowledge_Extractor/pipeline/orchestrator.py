@@ -24,7 +24,7 @@ from .state import PipelineState
 @dataclass
 class ExtractionResult:
     """Result of extracting a single chunk."""
-    page_number: int
+    page_number: float
     chunk_index: int
     chunk_text: str
     extraction: Optional[Dict[str, Any]]
@@ -95,7 +95,11 @@ class KnowledgeExtractionPipeline:
                 with open(page_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
-                page_num = int(page_file.stem.split('_')[1])
+                import re
+                match = re.search(r"pagina_([\d.]+)\.json", page_file.name)
+                if not match:
+                    continue
+                page_num = float(match.group(1))
                 
                 # Skip pages after start_page - 1
                 if page_num >= self.config.resume.start_page:
@@ -128,7 +132,7 @@ class KnowledgeExtractionPipeline:
                 print(f"⚠️ Error loading {page_file.name}: {e}")
         
         total_entities = self.context_manager.get_entity_count()
-        print(f"✅ Loaded {loaded_entities} entities from {self.config.resume.start_page - 1} pages")
+        print(f"✅ Loaded {loaded_entities} entities from previous pages")
         print(f"📊 Total accumulated entities: {total_entities}")
         print(f"🔢 Last IDs: {self.id_manager.get_all_ids()}")
     
@@ -212,7 +216,22 @@ class KnowledgeExtractionPipeline:
                     metadata={}
                 ))
         
+        # Inject sub-pages (e.g. pagina_5.2_chunks.json) between integer pages
+        sub_pages = sorted(
+            p for p in external_chunk_pages
+            if isinstance(p, float) and not p.is_integer()
+        )
+        for sp in sub_pages:
+            pages.append(Page(
+                number=sp,
+                text="",
+                metadata={"external_chunks": True}
+            ))
+        pages.sort(key=lambda p: p.number)
+        
         print(f"📊 Total pages in document: {total_pages}")
+        if sub_pages:
+            print(f"📂 Found {len(sub_pages)} sub-pages: {sub_pages}")
         if self.config.chunk_only:
             print(f"📝 CHUNK-ONLY MODE: Skipping KEX extraction")
         print(f"🚀 Starting extraction...\n")
@@ -221,7 +240,9 @@ class KnowledgeExtractionPipeline:
         last_chunk = None  # Rastrear último chunk para contexto
         
         try:
-            for page in pages:
+            for idx, page in enumerate(pages):
+                is_last_page = idx == len(pages) - 1
+                
                 # Skip pages before start_page
                 if page.number < self.config.resume.start_page:
                     continue
@@ -232,24 +253,30 @@ class KnowledgeExtractionPipeline:
                     break
                 
                 is_external = page.metadata.get("external_chunks", False)
+                is_sub_page = not float(page.number).is_integer()
                 if is_external:
-                    print(f"\n{'='*60}")
-                    print(f"📄 Processing page {page.number}/{total_pages} (using external chunks)")
-                    print(f"{'='*60}")
+                    if is_sub_page:
+                        print(f"\n{'='*60}")
+                        print(f"📄 Processing sub-page {page.number} (using external chunks)")
+                        print(f"{'='*60}")
+                    else:
+                        print(f"\n{'='*60}")
+                        print(f"📄 Processing page {int(page.number)}/{total_pages} (using external chunks)")
+                        print(f"{'='*60}")
                 else:
                     print(f"\n{'='*60}")
-                    print(f"📄 Processing page {page.number}/{total_pages}")
+                    print(f"📄 Processing page {int(page.number)}/{total_pages}")
                     print(f"{'='*60}")
                     
                 if self.config.chunk_only:
                     # Chunk-only mode: extract and save chunks only, skip KEX
                     page_results, last_chunk = self._process_page_chunks_only(
-                        page, doc_dir, total_pages, last_chunk
+                        page, doc_dir, is_last_page, last_chunk
                     )
                 else:
                     # Normal mode: full processing with KEX
                     page_results, last_chunk = self._process_page(
-                        page, doc_dir, total_pages, last_chunk
+                        page, doc_dir, is_last_page, last_chunk
                     )
                 
                 results.extend(page_results)
@@ -265,7 +292,7 @@ class KnowledgeExtractionPipeline:
                 
         finally:
             # Manejo especial de última página
-            if last_chunk and page.number == total_pages:
+            if last_chunk and is_last_page:
                 # La última página procesó su último chunk, pero no hay siguiente página
                 # Este chunk queda sin procesar KEX (correcto - no hay página siguiente)
                 print(f"  ℹ️  Last page chunk not processed (no next page): {last_chunk[:50]}...")
@@ -375,11 +402,10 @@ class KnowledgeExtractionPipeline:
         self, 
         page: Page, 
         output_dir: str, 
-        total_pages: int,
+        is_last_page: bool,
         previous_page_last_chunk: Optional[str] = None
     ) -> Tuple[List[ExtractionResult], Optional[str]]:
         """Chunk-only mode - retorna también el último chunk."""
-        is_last_page = page.number == total_pages
         chunks, last_chunk, source_type = self._extract_and_save_chunks(
             page, output_dir, previous_page_last_chunk,
             exclude_last_chunk_from_save=not is_last_page
@@ -392,14 +418,13 @@ class KnowledgeExtractionPipeline:
         self, 
         page: Page, 
         output_dir: str, 
-        total_pages: int,
+        is_last_page: bool,
         previous_page_last_chunk: Optional[str] = None
     ) -> Tuple[List[ExtractionResult], Optional[str]]:
         """Process a single page with full KEX extraction."""
         results = []
         
         # Extract and save chunks (handles both external and generated)
-        is_last_page = page.number == total_pages
         chunks, last_chunk, source_type = self._extract_and_save_chunks(
             page,
             output_dir,

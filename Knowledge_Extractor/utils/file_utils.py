@@ -4,7 +4,7 @@ File utilities for output management.
 import os
 import json
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 
 
 class FileUtils:
@@ -39,7 +39,7 @@ class FileUtils:
     @staticmethod
     def save_page_result(
         output_dir: str,
-        page_number: int,
+        page_number: float,
         data: Dict[str, Any]
     ):
         """
@@ -59,7 +59,7 @@ class FileUtils:
     @staticmethod
     def save_page_chunks(
         output_dir: str,
-        page_number: int,
+        page_number: float,
         chunks: List[str],
         granularity: str,
         llm_fallback: bool = False
@@ -94,7 +94,7 @@ class FileUtils:
             json.dump(data, f, ensure_ascii=False, indent=2)
     
     @staticmethod
-    def load_page_chunks(chunks_dir: str, page_number: int) -> Optional[List[str]]:
+    def load_page_chunks(chunks_dir: str, page_number: float) -> Optional[List[str]]:
         """
         Load pre-generated chunks for a specific page.
         
@@ -132,7 +132,7 @@ class FileUtils:
             chunks_dir: Directory containing chunk JSON files.
             
         Returns:
-            Set of page numbers (integers) that have chunk files.
+            Set of page numbers (floats, supports sub-pages like 5.2) that have chunk files.
         """
         import re
         available_pages = set()
@@ -142,10 +142,10 @@ class FileUtils:
             return available_pages
         
         for chunk_file in chunks_path.glob("pagina_*_chunks.json"):
-            # Extract page number from filename like "pagina_5_chunks.json"
-            match = re.match(r"pagina_(\d+)_chunks\.json", chunk_file.name)
+            # Extract page number from filename like "pagina_5_chunks.json" or "pagina_5.2_chunks.json"
+            match = re.match(r"pagina_([\d.]+)_chunks\.json", chunk_file.name)
             if match:
-                available_pages.add(int(match.group(1)))
+                available_pages.add(float(match.group(1)))
         
         return available_pages
 
