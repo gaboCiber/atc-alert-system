@@ -2,11 +2,12 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from tqdm import tqdm
 
-from config import E2Config, JudgeConfig, MetricConfig
+from config import E2Config, JudgeConfig, MetricConfig, DedupConfig
 from loader import ExperimentData, KexPageResult
 from matcher import match_all_types, MatchingOutput, KEX_TYPES
 from metrics import PageMetrics, compute_page_metrics, PageTypeMetrics
 from llm_judge import LLMJudge, Judgment
+from dedup import DedupReport, analyze_model
 
 
 @dataclass
@@ -101,6 +102,7 @@ class EvaluationResults:
     pages: List[int]
     page_results: Dict[str, List[ModelPageMetrics]]
     summaries: Dict[str, ModelSummaryMetrics]
+    dedup_reports: Dict[str, DedupReport] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         page_results_serializable = {}
@@ -178,6 +180,9 @@ class EvaluationResults:
             "pages": self.pages,
             "page_results": page_results_serializable,
             "summaries": summaries_serializable,
+            "dedup_reports": {
+                model: report.to_dict() for model, report in self.dedup_reports.items()
+            },
         }
 
 
@@ -185,6 +190,7 @@ def run_evaluation(
     data: ExperimentData,
     judge: LLMJudge,
     metric_cfg: MetricConfig,
+    dedup_cfg: Optional[DedupConfig] = None,
 ) -> EvaluationResults:
     page_results: Dict[str, List[ModelPageMetrics]] = {model: [] for model in data.model_names}
 
@@ -244,9 +250,23 @@ def run_evaluation(
     for model_name in data.model_names:
         summaries[model_name] = _compute_summary(model_name, page_results[model_name], metric_cfg)
 
+    dedup_reports: Dict[str, DedupReport] = {}
+    if dedup_cfg and dedup_cfg.enabled and judge.client is not None:
+        print("\nRunning dedup analysis...")
+        for model_name in tqdm(data.model_names, desc="Dedup models"):
+            model_result = data.model_results[model_name]
+            report = analyze_model(
+                model_result=model_result,
+                judge=judge,
+                batch_size=dedup_cfg.batch_size,
+                threshold=dedup_cfg.threshold,
+            )
+            dedup_reports[model_name] = report
+
     return EvaluationResults(
         model_names=data.model_names,
         pages=data.pages,
         page_results=page_results,
         summaries=summaries,
+        dedup_reports=dedup_reports,
     )

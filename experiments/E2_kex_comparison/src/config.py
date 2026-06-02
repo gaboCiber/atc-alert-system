@@ -51,6 +51,13 @@ class JudgeConfig:
 
 
 @dataclass
+class DedupConfig:
+    enabled: bool = True
+    batch_size: int = 10
+    threshold: float = 0.80
+
+
+@dataclass
 class MetricConfig:
     structural_weight: float = 0.15
     content_weight: float = 0.10

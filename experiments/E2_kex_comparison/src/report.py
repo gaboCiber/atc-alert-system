@@ -320,6 +320,11 @@ def generate_report(
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary_data, f, indent=2, ensure_ascii=False, cls=NumpyEncoder)
 
+    for model_name, report_obj in results.dedup_reports.items():
+        dedup_path = output_dir / f"dedup_{model_name}.json"
+        with open(dedup_path, "w", encoding="utf-8") as f:
+            json.dump(report_obj.to_dict(), f, indent=2, ensure_ascii=False, cls=NumpyEncoder)
+
     report = {
         "page_metrics": str(page_metrics_path),
         "summary": str(summary_path),

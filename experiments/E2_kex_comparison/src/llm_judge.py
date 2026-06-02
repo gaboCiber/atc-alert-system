@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel, Field
 
@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT))
 from common.llm_client_factory import create_instructor_client, ModelConfig
 
 from config import JudgeConfig
+from dedup_prompts import DEDUP_PROMPTS, FIELD_EXTRACTORS
 
 JUDGE_PROMPTS = {
     "entities": """You are evaluating the quality of knowledge extraction from aeronautical documentation.
@@ -171,6 +172,29 @@ class Judgment(BaseModel):
     )
 
 
+class CandidateJudgment(BaseModel):
+    candidate_id: str = Field(..., description="ID of the candidate item")
+    similarity_score: float = Field(
+        ...,
+        description="Semantic similarity score from 0.0 to 1.0",
+        ge=0.0,
+        le=1.0,
+    )
+    is_duplicate: bool = Field(
+        ...,
+        description="True if this candidate represents the SAME real-world concept as the reference",
+    )
+    explanation: str = Field(..., description="Brief justification for the judgment")
+
+
+class BatchJudgment(BaseModel):
+    reference_id: str = Field(..., description="ID of the reference item")
+    judgments: List[CandidateJudgment] = Field(
+        ...,
+        description="List of judgments for each candidate",
+    )
+
+
 class LLMJudge:
     def __init__(self, config: JudgeConfig):
         self.config = config
@@ -250,3 +274,89 @@ class LLMJudge:
             params["except_when"] = params["formal_if_then_except_when"]
 
         return params
+
+    def batch_judge(
+        self,
+        kex_type: str,
+        reference: dict,
+        candidates: List[dict],
+    ) -> Optional[BatchJudgment]:
+        if not self.config.enabled or self.client is None:
+            return None
+
+        prompt_template = DEDUP_PROMPTS.get(kex_type)
+        if not prompt_template:
+            return None
+
+        fields = FIELD_EXTRACTORS.get(kex_type, [])
+
+        ref_params = self._extract_fields(reference, fields)
+        ref_str = "\n  ".join(f"{k}: {v}" for k, v in ref_params.items())
+
+        cand_lines = []
+        for i, cand in enumerate(candidates):
+            cand_params = self._extract_fields(cand, fields)
+            parts = [f"  {cand.get('global_id', cand.get('id', f'candidate_{i}'))}:"]
+            for k, v in cand_params.items():
+                parts.append(f"    {k}: {v}")
+            cand_lines.append("\n".join(parts))
+
+        candidates_str = "\n\n".join(
+            f"Candidate {i+1}:\n{c}" for i, c in enumerate(cand_lines)
+        )
+
+        prompt = prompt_template.format(
+            **ref_params,
+            candidates=candidates_str,
+        )
+
+        try:
+            result = self.client.chat.completions.create(
+                model=self.config.model_name,
+                response_model=BatchJudgment,
+                max_retries=self.config.max_retries,
+                messages=[
+                    {"role": "system", "content": "You are an expert evaluator of aeronautical knowledge extraction quality."},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+            result.reference_id = ref_params.get("id", reference.get("id", ""))
+            return result
+        except Exception as e:
+            if self.config.skip_on_error:
+                return None
+            raise
+
+    def _extract_fields(self, item: dict, fields: List[str]) -> dict:
+        result = {}
+        for f in fields:
+            if f == "trigger":
+                trigger = item.get("trigger", {})
+                if isinstance(trigger, dict):
+                    result["trigger_desc"] = str(trigger.get("description", "N/A"))
+                else:
+                    result["trigger_desc"] = str(trigger)
+            elif f == "constraint":
+                constraint = item.get("constraint", {})
+                if isinstance(constraint, dict):
+                    result["constraint_desc"] = str(constraint.get("description", "N/A"))
+                else:
+                    result["constraint_desc"] = str(constraint)
+            elif f == "formal_if_then":
+                fit = item.get("formal_if_then", {})
+                if isinstance(fit, dict):
+                    result["if_condition"] = str(fit.get("if_condition", fit.get("if", "N/A")))
+                    result["then_action"] = str(fit.get("then_action", fit.get("then", "N/A")))
+                else:
+                    result["if_condition"] = "N/A"
+                    result["then_action"] = "N/A"
+            else:
+                v = item.get(f)
+                if isinstance(v, list):
+                    result[f] = ", ".join(str(x) for x in v)
+                elif v is None:
+                    result[f] = "N/A"
+                else:
+                    result[f] = str(v)
+        result["id"] = item.get("global_id", item.get("id", "unknown"))
+        return result

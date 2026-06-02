@@ -5,11 +5,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import E2Config, JudgeConfig, MetricConfig
+from config import E2Config, JudgeConfig, MetricConfig, DedupConfig
 from loader import ExperimentData
 from llm_judge import LLMJudge
 from evaluator import run_evaluation
 from report import generate_report
+from dedup import format_card
 
 
 def main():
@@ -38,6 +39,9 @@ Examples:
     parser.add_argument("--judge-max-retries", type=int, default=3)
     parser.add_argument("--fuzzy-threshold", type=float, default=70.0)
     parser.add_argument("--semantic-weight", type=float, default=0.60)
+    parser.add_argument("--no-dedup", action="store_true", help="Skip dedup analysis")
+    parser.add_argument("--dedup-batch-size", type=int, default=10, help="Batch size for dedup LLM calls")
+    parser.add_argument("--dedup-threshold", type=float, default=0.80, help="Similarity threshold for dedup")
 
     args = parser.parse_args()
 
@@ -68,6 +72,12 @@ Examples:
         fuzzy_threshold=args.fuzzy_threshold,
     )
 
+    dedup_cfg = DedupConfig(
+        enabled=not args.no_dedup and not args.no_judge,
+        batch_size=args.dedup_batch_size,
+        threshold=args.dedup_threshold,
+    )
+
     print("=" * 60)
     print("E2: KEX Comparison Experiment")
     print("=" * 60)
@@ -79,6 +89,10 @@ Examples:
         print(f"    Model:     {judge_cfg.model_name}")
         print(f"    Provider:  {judge_cfg.provider}")
     print(f"  Weights:     Structural={metric_cfg.structural_weight}, Content={metric_cfg.content_weight}, CrossRef={metric_cfg.cross_ref_weight}, Semantic={metric_cfg.semantic_weight}")
+    print(f"  Dedup:       {'enabled' if dedup_cfg.enabled else 'disabled'}")
+    if dedup_cfg.enabled:
+        print(f"    Batch:    {dedup_cfg.batch_size}")
+        print(f"    Thresh:   {dedup_cfg.threshold}")
     print()
 
     print("Loading experiment data...")
@@ -97,7 +111,7 @@ Examples:
     judge = LLMJudge(judge_cfg)
 
     print("Running evaluation...")
-    results = run_evaluation(data, judge, metric_cfg)
+    results = run_evaluation(data, judge, metric_cfg, dedup_cfg)
     print(f"  Evaluated {len(data.pages)} pages across {len(data.model_names)} models")
     print()
 
@@ -124,6 +138,23 @@ Examples:
     for entry in report.get("ranking", []):
         print(f"  #{entry['rank']}: {entry['model']}")
         print(f"       Score={entry['overall_score']:.3f} | F1={entry['structural_f1']:.3f} | Content={entry['content_avg']:.3f} | CrossRef={entry['cross_ref_avg']:.3f} | Semantic={entry['semantic_avg']:.3f}")
+
+    print()
+    print("=" * 60)
+    print("DEDUP REPORT")
+    print("=" * 60)
+    if results.dedup_reports:
+        for model_name, report in results.dedup_reports.items():
+            card = format_card(report)
+            dedup_card_path = cfg.results_dir / f"dedup_{model_name}_card.txt"
+            dedup_card_path.write_text(card, encoding="utf-8")
+            print(f"\n{model_name}:")
+            for kex_type, m in report.by_type.items():
+                print(f"  {kex_type:15s} {m.duplication_rate:>7.2%}  ({m.duplicate_count}/{m.total_items})  clusters: {m.cluster_count}")
+            print(f"  {'OVERALL':15s} {report.overall_duplication_rate:>7.2%}")
+            print(f"  (detailed card saved to {dedup_card_path})")
+    else:
+        print("  (disabled or no data)")
 
     print()
     print("Done.")

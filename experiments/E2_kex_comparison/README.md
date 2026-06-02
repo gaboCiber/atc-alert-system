@@ -21,14 +21,19 @@ E2_kex_comparison/
 │       └── ...
 │
 ├── src/
-│   ├── config.py      # Configuration (paths, judge config, metric weights)
-│   ├── loader.py      # Load KEX outputs + errors
-│   ├── matcher.py     # Fuzzy matching GT ↔ model
-│   ├── metrics.py     # Structural + content + cross-ref metrics
-│   ├── llm_judge.py   # LLM-as-a-judge with Instructor
-│   ├── evaluator.py   # Orchestrate evaluation
-│   ├── report.py      # Generate JSON results + PNG figures
-│   └── run.py         # CLI entry point
+│   ├── config.py            # Configuration (paths, judge config, metric weights)
+│   ├── loader.py            # Load KEX outputs + errors
+│   ├── matcher.py           # Fuzzy matching GT ↔ model
+│   ├── metrics.py           # Structural + content + cross-ref metrics
+│   ├── llm_judge.py         # LLM-as-a-judge with Instructor
+│   ├── dedup_prompts.py     # Batch LLM prompts for semantic dedup detection
+│   ├── dedup.py             # Cross-page semantic dedup (UnionFind, clustering, report)
+│   ├── evaluator.py         # Orchestrate evaluation
+│   ├── report.py            # Generate JSON results + PNG figures
+│   └── run.py               # CLI entry point
+│
+├── scripts/
+│   └── dedup_model.py       # Standalone dedup tool for pseudo-GT creation
 │
 ├── results/
 │   ├── page_metrics.json             # Per-page detailed metrics
@@ -63,6 +68,14 @@ E2_kex_comparison/
 
 # Custom weights
 /path/to/.venv/bin/python src/run.py --semantic-weight 0.75
+
+# Disable dedup detection (enabled by default)
+/path/to/.venv/bin/python src/run.py --no-dedup
+
+# Standalone: analyze duplicates in a model output (pseudo-GT debugging)
+/path/to/.venv/bin/python scripts/dedup_model.py \
+    --model-dir models/"ICAO Standard Phraseology(gemma4:31b-cloud)" \
+    --threshold 0.80 --batch-size 10
 ```
 
 ## Metrics
@@ -91,6 +104,16 @@ E2_kex_comparison/
 | **LLM Judge Score** | 0-1 similarity score per matched pair |
 | **Explanation** | LLM explanation for each score |
 
+### Dedup Detection (Diagnostic)
+| Metric | Description |
+|--------|-------------|
+| **Duplicate Clusters** | Groups of semantically identical items within a model |
+| **Dedup Rate** | % of items that are duplicates (redundant / total) |
+| **Cluster Sizes** | Distribution of cluster sizes (2, 3, ... items per cluster) |
+| **Type Breakdown** | Duplicates per type (entity, relation, event, rule, procedure) |
+
+Detection uses **LLM-as-a-judge in batch mode** (1 call per reference vs up to N candidates, triangular). Short-circuit exact match after normalization (lower+strip) triggers at 1.0 without LLM call. Default threshold: ≥0.80. Union-Find merges transitive clusters (A≈B and A≈C → {A,B,C}).
+
 ### Overall Score
 Weighted combination:
 - Structural F1: 15%
@@ -112,9 +135,11 @@ Threshold: 70% similarity → match (configurable via `--fuzzy-threshold`)
 ## LLM-as-a-Judge
 
 - Uses `common/llm_client_factory.py` (Instructor)
-- **Schema Pydantic**: `Judgment(similarity_score, explanation, matched_fields, unmatched_fields)`
+- **Schema Pydantic**: `Judgment(similarity_score, explanation, matched_fields, unmatched_fields)` (pairwise)
+- **Schema Pydantic**: `BatchJudgment(result: list[CandidateJudgment])` (batch)
 - **Blind**: model name is never revealed to the judge
-- **One call per matched pair** for maximum precision
+- **One call per matched pair** for maximum precision (evaluation)
+- **One call per reference vs N candidates** for dedup (batch, triangular matrix)
 - **Type-specific prompts** for each knowledge type
 
 ## Error Analysis
@@ -128,4 +153,5 @@ Automatically reads `pagina_N_errors.json` files and includes:
 
 - `page_metrics.json`: Every page, every model, every metric, every type
 - `summary.json`: Model ranking by overall score
+- `dedup_{model}.json`: Per-model duplicate cluster report (when dedup enabled)
 - `figures/`: 8 visualization PNGs
