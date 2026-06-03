@@ -36,14 +36,3 @@ class E1Config:
             cfg.results_dir = Path(output_dir)
             cfg.figures_dir = cfg.results_dir / "figures"
         return cfg
-
-
-@dataclass
-class MetricConfig:
-    chunk_count_weight: float = 0.25
-    boundary_f1_weight: float = 0.25
-    content_f1_weight: float = 0.25
-    rouge_l_weight: float = 0.25
-    fuzzy_threshold: int = 80
-    visualization_dpi: int = 150
-    visualization_style: str = "seaborn-v0.8-darkgrid"

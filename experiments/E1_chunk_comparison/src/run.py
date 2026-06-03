@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import E1Config, MetricConfig
+from config import E1Config
 from loader import ExperimentData
 from evaluator import run_evaluation
 from report import generate_report
@@ -77,8 +77,6 @@ Examples:
 
     cfg.figures_dir.mkdir(parents=True, exist_ok=True)
 
-    metric_cfg = MetricConfig(visualization_dpi=args.dpi, visualization_style=args.style)
-
     print("=" * 60)
     print("E1: Chunk Comparison Experiment")
     print("=" * 60)
@@ -128,7 +126,7 @@ Examples:
     print("MODEL RANKING (by overall score):")
     for entry in report.get("ranking", []):
         print(f"  #{entry['rank']}: {entry['model']}")
-        print(f"       Score={entry['overall_score']:.3f} | F1={entry['boundary_f1_mean']:.3f} | CharF1={entry['char_f1_mean']:.3f}")
+        print(f"       Score={entry['overall_score']:.3f}  BoundaryF1={entry['boundary_f1_mean']:.3f}  ContentF1={entry['matched_content_f1_mean']:.3f}  ChunkAcc={entry['chunk_count_accuracy_mean']:.3f}  BoundaryInt={entry['boundary_integrity_mean']:.3f}")
 
     print()
     print("Done.")

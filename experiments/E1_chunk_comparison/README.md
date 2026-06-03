@@ -93,24 +93,20 @@ python src/run.py --no-figures
 ### Content
 | Metric | Description |
 |--------|-------------|
-| **Char F1** | F1 on character-level tokens |
-| **Word F1** | F1 on word-level LCS |
-| **ROUGE-L** | Longest common subsequence ratio |
-| **Token Overlap Ratio** | LCS / GT tokens |
-| **Fuzzy Match Ratio** | Average best-match fuzzy score per chunk |
+| **Matched Content F1** | F1 on per-matched-pair chunk similarity (via bipartite matching). Each matched pair is scored by `fuzz.ratio`, unmatched chunks score 0. |
+| **Boundary Integrity** | Proportion of chunk boundaries that align with NLTK sentence boundaries. Measures segmentation quality independent of GT. |
 
 ### Overall Score
 Weighed combination:
-- Chunk Count Accuracy: 15%
-- Boundary F1: 20%
-- Char F1: 25%
-- Word F1: 20%
-- ROUGE-L: 20%
+- Chunk Count Accuracy: 20%
+- Boundary F1: 30%
+- Matched Content F1: 30%
+- Boundary Integrity: 20%
 
 ## Output
 
 - `page_metrics.json`: Every page, every model, every metric
-- `summary.json`: Model ranking by overall score
+- `summary.json`: Model ranking by overall score with all component metrics
 - `figures/`: 8 visualization PNGs (distribution, heatmaps, radar, boxplots)
 
 ## Creating Ground Truth

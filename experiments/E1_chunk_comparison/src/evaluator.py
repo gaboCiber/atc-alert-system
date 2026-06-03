@@ -3,7 +3,7 @@ from typing import List, Dict
 
 import numpy as np
 
-from config import E1Config, MetricConfig
+from config import E1Config
 from loader import ExperimentData, ModelResult
 from metrics import PageMetrics, compute_page_metrics
 
@@ -28,13 +28,13 @@ class ModelSummaryMetrics:
     boundary_recall_mean: float = 0.0
     boundary_avg_error_mean: float = 0.0
 
-    char_f1_mean: float = 0.0
-    char_f1_std: float = 0.0
-    word_f1_mean: float = 0.0
-    word_f1_std: float = 0.0
-    rouge_l_mean: float = 0.0
-    token_overlap_mean: float = 0.0
-    fuzzy_match_mean: float = 0.0
+    matched_content_precision_mean: float = 0.0
+    matched_content_recall_mean: float = 0.0
+    matched_content_f1_mean: float = 0.0
+    matched_content_f1_std: float = 0.0
+
+    boundary_integrity_mean: float = 0.0
+    boundary_integrity_std: float = 0.0
 
     overall_score: float = 0.0
 
@@ -53,27 +53,25 @@ def _compute_summary(model_name: str, page_metrics_list: List[PageMetrics]) -> M
     s.boundary_recall_mean = np.mean([pm.structural.boundary_recall for pm in page_metrics_list])
     s.boundary_avg_error_mean = np.mean([pm.structural.boundary_avg_error for pm in page_metrics_list])
 
-    s.char_f1_mean = np.mean([pm.content.char_f1 for pm in page_metrics_list])
-    s.char_f1_std = np.std([pm.content.char_f1 for pm in page_metrics_list])
-    s.word_f1_mean = np.mean([pm.content.word_f1 for pm in page_metrics_list])
-    s.word_f1_std = np.std([pm.content.word_f1 for pm in page_metrics_list])
-    s.rouge_l_mean = np.mean([pm.content.rouge_l for pm in page_metrics_list])
-    s.token_overlap_mean = np.mean([pm.content.token_overlap_ratio for pm in page_metrics_list])
-    s.fuzzy_match_mean = np.mean([pm.content.fuzzy_match_ratio for pm in page_metrics_list])
+    s.matched_content_precision_mean = np.mean([pm.content.matched_content_precision for pm in page_metrics_list])
+    s.matched_content_recall_mean = np.mean([pm.content.matched_content_recall for pm in page_metrics_list])
+    s.matched_content_f1_mean = np.mean([pm.content.matched_content_f1 for pm in page_metrics_list])
+    s.matched_content_f1_std = np.std([pm.content.matched_content_f1 for pm in page_metrics_list])
+
+    s.boundary_integrity_mean = np.mean([pm.content.boundary_integrity for pm in page_metrics_list])
+    s.boundary_integrity_std = np.std([pm.content.boundary_integrity for pm in page_metrics_list])
 
     weights = {
-        "chunk_count_accuracy": 0.15,
-        "boundary_f1": 0.20,
-        "char_f1": 0.25,
-        "word_f1": 0.20,
-        "rouge_l": 0.20,
+        "chunk_count_accuracy": 0.20,
+        "boundary_f1": 0.30,
+        "matched_content_f1": 0.30,
+        "boundary_integrity": 0.20,
     }
     score = (
         weights["chunk_count_accuracy"] * s.chunk_count_accuracy_mean
         + weights["boundary_f1"] * s.boundary_f1_mean
-        + weights["char_f1"] * s.char_f1_mean
-        + weights["word_f1"] * s.word_f1_mean
-        + weights["rouge_l"] * s.rouge_l_mean
+        + weights["matched_content_f1"] * s.matched_content_f1_mean
+        + weights["boundary_integrity"] * s.boundary_integrity_mean
     )
     s.overall_score = score
 
@@ -104,15 +102,10 @@ class EvaluationResults:
                         "boundary_avg_error": pm.structural.boundary_avg_error,
                     },
                     "content": {
-                        "char_f1": pm.content.char_f1,
-                        "char_precision": pm.content.char_precision,
-                        "char_recall": pm.content.char_recall,
-                        "word_f1": pm.content.word_f1,
-                        "word_precision": pm.content.word_precision,
-                        "word_recall": pm.content.word_recall,
-                        "rouge_l": pm.content.rouge_l,
-                        "token_overlap_ratio": pm.content.token_overlap_ratio,
-                        "fuzzy_match_ratio": pm.content.fuzzy_match_ratio,
+                        "matched_content_precision": pm.content.matched_content_precision,
+                        "matched_content_recall": pm.content.matched_content_recall,
+                        "matched_content_f1": pm.content.matched_content_f1,
+                        "boundary_integrity": pm.content.boundary_integrity,
                     },
                 }
                 for pm in pms
@@ -133,13 +126,12 @@ class EvaluationResults:
                     "boundary_avg_error_mean": sm.boundary_avg_error_mean,
                 },
                 "content": {
-                    "char_f1_mean": sm.char_f1_mean,
-                    "char_f1_std": sm.char_f1_std,
-                    "word_f1_mean": sm.word_f1_mean,
-                    "word_f1_std": sm.word_f1_std,
-                    "rouge_l_mean": sm.rouge_l_mean,
-                    "token_overlap_mean": sm.token_overlap_mean,
-                    "fuzzy_match_mean": sm.fuzzy_match_mean,
+                    "matched_content_precision_mean": sm.matched_content_precision_mean,
+                    "matched_content_recall_mean": sm.matched_content_recall_mean,
+                    "matched_content_f1_mean": sm.matched_content_f1_mean,
+                    "matched_content_f1_std": sm.matched_content_f1_std,
+                    "boundary_integrity_mean": sm.boundary_integrity_mean,
+                    "boundary_integrity_std": sm.boundary_integrity_std,
                 },
             }
 

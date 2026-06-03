@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from config import E1Config, MetricConfig
+from config import E1Config
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -165,10 +165,8 @@ def plot_radar_comparison(
     metrics_names = [
         "Chunk Count\nAccuracy",
         "Boundary\nF1",
-        "Char F1",
-        "Word F1",
-        "ROUGE-L",
-        "Fuzzy\nMatch",
+        "Matched\nContent F1",
+        "Boundary\nIntegrity",
     ]
     n_metrics = len(metrics_names)
 
@@ -183,10 +181,8 @@ def plot_radar_comparison(
         values = [
             sm.chunk_count_accuracy_mean,
             sm.boundary_f1_mean,
-            sm.char_f1_mean,
-            sm.word_f1_mean,
-            sm.rouge_l_mean,
-            sm.fuzzy_match_mean,
+            sm.matched_content_f1_mean,
+            sm.boundary_integrity_mean,
         ]
         values += values[:1]
 
@@ -207,24 +203,22 @@ def plot_content_metrics_boxplot(
     results: EvaluationResults,
     cfg: E1Config,
 ) -> plt.Figure:
-    metric_names = ["char_f1", "word_f1", "rouge_l", "fuzzy_match_ratio"]
-    metric_labels = ["Char F1", "Word F1", "ROUGE-L", "Fuzzy Match"]
+    fig, ax = plt.subplots(figsize=(10, 5))
 
-    fig, axes = plt.subplots(1, 4, figsize=(16, 5))
+    data_rows = []
+    for model in results.model_names:
+        for pm in results.page_results[model]:
+            data_rows.append({
+                "Model": _short_name(model),
+                "Matched Content F1": pm.content.matched_content_f1,
+            })
+    df = pd.DataFrame(data_rows)
 
-    for ax, mname, mlabel in zip(axes, metric_names, metric_labels):
-        data_rows = []
-        for model in results.model_names:
-            for pm in results.page_results[model]:
-                val = getattr(pm.content, mname)
-                data_rows.append({"Model": _short_name(model), "Value": val})
-
-        df = pd.DataFrame(data_rows)
-        sns.boxplot(data=df, x="Model", y="Value", ax=ax, hue="Model", palette="tab10", legend=False)
-        ax.set_title(mlabel, fontsize=11, fontweight="bold")
-        ax.tick_params(axis="x", rotation=45)
-        ax.set_ylim(0, 1.05)
-        ax.grid(axis="y", alpha=0.3)
+    sns.boxplot(data=df, x="Model", y="Matched Content F1", ax=ax, hue="Model", palette="tab10", legend=False)
+    ax.set_title("Matched Content F1 Distribution per Model", fontsize=13, fontweight="bold")
+    ax.tick_params(axis="x", rotation=45)
+    ax.set_ylim(0, 1.05)
+    ax.grid(axis="y", alpha=0.3)
 
     plt.tight_layout()
     return fig
@@ -258,20 +252,19 @@ def plot_page_by_page_comparison(
     results: EvaluationResults,
     cfg: E1Config,
 ) -> plt.Figure:
-    metrics = ["boundary_f1", "char_f1", "word_f1", "rouge_l"]
-    metric_labels = ["Boundary F1", "Char F1", "Word F1", "ROUGE-L"]
+    metrics = ["boundary_f1", "matched_content_f1"]
+    metric_labels = ["Boundary F1", "Matched Content F1"]
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    axes = axes.flatten()
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     for ax, mname, mlabel in zip(axes, metrics, metric_labels):
         x = np.arange(len(results.pages))
         for model in results.model_names:
             short = _short_name(model)
-            if mname.startswith("boundary"):
+            if mname == "boundary_f1":
                 vals = [pm.structural.boundary_f1 for pm in results.page_results[model]]
             else:
-                vals = [getattr(pm.content, mname) for pm in results.page_results[model]]
+                vals = [pm.content.matched_content_f1 for pm in results.page_results[model]]
             ax.plot(x, vals, "o-", label=short, linewidth=2, markersize=4)
 
         ax.set_xlabel("Page", fontsize=10)
@@ -320,18 +313,22 @@ def generate_report(
         json.dump(results.to_dict(), f, indent=2, ensure_ascii=False, cls=NumpyEncoder)
 
     summary_path = output_dir / "summary.json"
+    sorted_indices = np.argsort(
+        [results.summaries[m].overall_score for m in results.model_names]
+    )[::-1]
+
     summary_data = {
         "ranking": [
             {
-                "rank": i + 1,
-                "model": results.model_names[i],
-                "overall_score": results.summaries[results.model_names[i]].overall_score,
-                "boundary_f1_mean": results.summaries[results.model_names[i]].boundary_f1_mean,
-                "char_f1_mean": results.summaries[results.model_names[i]].char_f1_mean,
-                "word_f1_mean": results.summaries[results.model_names[i]].word_f1_mean,
-                "rouge_l_mean": results.summaries[results.model_names[i]].rouge_l_mean,
+                "rank": pos + 1,
+                "model": results.model_names[idx],
+                "overall_score": results.summaries[results.model_names[idx]].overall_score,
+                "boundary_f1_mean": results.summaries[results.model_names[idx]].boundary_f1_mean,
+                "matched_content_f1_mean": results.summaries[results.model_names[idx]].matched_content_f1_mean,
+                "chunk_count_accuracy_mean": results.summaries[results.model_names[idx]].chunk_count_accuracy_mean,
+                "boundary_integrity_mean": results.summaries[results.model_names[idx]].boundary_integrity_mean,
             }
-            for i in np.argsort([results.summaries[m].overall_score for m in results.model_names])[::-1]
+            for pos, idx in enumerate(sorted_indices)
         ]
     }
     with open(summary_path, "w", encoding="utf-8") as f:
