@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 
-from config import E2Config
+from .config import E2Config
 
 KEX_TYPES = ["entities", "relationships", "events", "rules", "procedures"]
 
@@ -20,9 +20,29 @@ class KexPageResult:
     errors: List[Dict[str, Any]] = field(default_factory=list)
     original_text: str = ""
     granularity: str = ""
+    sentence_results: List[Dict[str, Any]] = field(default_factory=list)
 
     def get_by_type(self, kex_type: str) -> List[Dict[str, Any]]:
         return getattr(self, kex_type, [])
+
+    def get_chunk(self, chunk_index: int) -> Optional[Dict[str, Any]]:
+        """Get a specific chunk by index (0-based)"""
+        if 0 <= chunk_index < len(self.sentence_results):
+            return self.sentence_results[chunk_index]
+        return None
+
+    def get_chunk_by_type(self, chunk_index: int, kex_type: str) -> List[Dict[str, Any]]:
+        """Get items of a specific type from a specific chunk"""
+        chunk = self.get_chunk(chunk_index)
+        if chunk and "ner" in chunk:
+            ner = chunk["ner"]
+            if isinstance(ner, dict):
+                return ner.get(kex_type, [])
+        return []
+
+    def chunk_count(self) -> int:
+        """Get the number of chunks in this page"""
+        return len(self.sentence_results)
 
     def to_dict(self) -> dict:
         return {
@@ -50,24 +70,28 @@ def load_kex_page(filepath: Path) -> Optional[KexPageResult]:
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
 
+        sentence_results = data.get("sentence_results", [])
+
         result = KexPageResult(
             page_number=data.get("page_number", 1),
-            entities=data.get("sentence_results", [{}])[0].get("entities", []) if "sentence_results" in data else data.get("entities", []),
-            relationships=data.get("sentence_results", [{}])[0].get("relationships", []) if "sentence_results" in data else data.get("relationships", []),
-            events=data.get("sentence_results", [{}])[0].get("events", []) if "sentence_results" in data else data.get("events", []),
-            rules=data.get("sentence_results", [{}])[0].get("rules", []) if "sentence_results" in data else data.get("rules", []),
-            procedures=data.get("sentence_results", [{}])[0].get("procedures", []) if "sentence_results" in data else data.get("procedures", []),
+            entities=[],
+            relationships=[],
+            events=[],
+            rules=[],
+            procedures=[],
+            errors=[],
             original_text=data.get("original_text", ""),
             granularity=data.get("granularity", ""),
+            sentence_results=sentence_results,
         )
 
-        if "sentence_results" in data:
+        if sentence_results:
             all_entities = []
             all_relationships = []
             all_events = []
             all_rules = []
             all_procedures = []
-            for sr in data["sentence_results"]:
+            for sr in sentence_results:
                 ner = sr.get("ner", {})
                 if isinstance(ner, dict):
                     all_entities.extend(ner.get("entities", []))

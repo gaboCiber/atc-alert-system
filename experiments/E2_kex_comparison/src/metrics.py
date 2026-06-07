@@ -1,8 +1,8 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
-from matcher import MatchingOutput, KEX_TYPES
-from loader import KexPageResult
+from .matcher import MatchingOutput, KEX_TYPES
+from .loader import KexPageResult
 
 
 @dataclass

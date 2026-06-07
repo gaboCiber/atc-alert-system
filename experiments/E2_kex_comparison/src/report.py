@@ -7,9 +7,9 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from config import E2Config
-from evaluator import EvaluationResults, ModelSummaryMetrics, ModelPageMetrics
-from matcher import KEX_TYPES
+from .config import E2Config
+from .evaluator import EvaluationResults, ModelSummaryMetrics, ModelPageMetrics
+from .matcher import KEX_TYPES
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -186,7 +186,7 @@ def plot_error_rate_heatmap(
     results: EvaluationResults,
     cfg: E2Config,
 ) -> plt.Figure:
-    from loader import ExperimentData
+    from .loader import ExperimentData
 
     matrix = np.zeros((len(results.model_names), len(results.pages)))
     for i, model in enumerate(results.model_names):
@@ -228,7 +228,15 @@ def plot_per_page_f1(
     x = np.arange(len(results.pages))
     for model in results.model_names:
         short = _short_name(model)
-        f1s = [pm.structural_metrics.overall_f1 for pm in results.page_results[model]]
+        # Create a list of F1 scores for each page, filling missing pages with 0
+        f1s = []
+        for page in results.pages:
+            # Find the ModelPageMetrics for this model and page
+            pm_for_page = next((pm for pm in results.page_results[model] if pm.page == page), None)
+            if pm_for_page:
+                f1s.append(pm_for_page.structural_metrics.overall_f1)
+            else:
+                f1s.append(0.0)  # No results for this page/model combination
         ax.plot(x, f1s, "o-", label=short, linewidth=2, markersize=5)
 
     ax.set_xlabel("Page", fontsize=11)
@@ -253,12 +261,20 @@ def plot_per_page_semantic(
     x = np.arange(len(results.pages))
     for model in results.model_names:
         short = _short_name(model)
-        sems = [pm.overall_semantic for pm in results.page_results[model]]
+        # Create a list of semantic scores for each page, filling missing pages with 0
+        sems = []
+        for page in results.pages:
+            # Find the ModelPageMetrics for this model and page
+            pm_for_page = next((pm for pm in results.page_results[model] if pm.page == page), None)
+            if pm_for_page:
+                sems.append(pm_for_page.overall_semantic)
+            else:
+                sems.append(0.0)  # No results for this page/model combination
         ax.plot(x, sems, "s--", label=short, linewidth=2, markersize=5)
 
     ax.set_xlabel("Page", fontsize=11)
-    ax.set_ylabel("Semantic Score", fontsize=11)
-    ax.set_title("LLM Semantic Score per Page", fontsize=13, fontweight="bold")
+    ax.set_ylabel("Overall Semantic Score", fontsize=11)
+    ax.set_title("Overall Semantic Score per Page", fontsize=13, fontweight="bold")
     ax.set_xticks(x)
     ax.set_xticklabels([f"P{p}" for p in results.pages])
     ax.legend(fontsize=9)
@@ -313,6 +329,7 @@ def generate_report(
                 "content_avg": results.summaries[m].content_avg,
                 "cross_ref_avg": results.summaries[m].cross_ref_avg,
                 "semantic_avg": results.summaries[m].semantic_avg,
+                "dedup_avg": results.summaries[m].dedup_avg,
             }
             for i, m in enumerate(sorted_models)
         ]

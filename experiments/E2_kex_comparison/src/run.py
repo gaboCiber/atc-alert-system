@@ -3,29 +3,18 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from config import E2Config, JudgeConfig, MetricConfig, DedupConfig
-from loader import ExperimentData
-from llm_judge import LLMJudge
-from evaluator import run_evaluation
-from report import generate_report
-from dedup import format_card
+from src.config import E2Config, JudgeConfig, MetricConfig, DedupConfig
+from src.loader import ExperimentData
+from src.llm_judge import LLMJudge
+from src.evaluator import run_evaluation
+from src.report import generate_report
+from src.dedup import format_card
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="E2: KEX comparison between models and Ground Truth",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python run.py                                                  # default paths
-  python run.py --no-judge                                       # skip LLM judge
-  python run.py --judge-model gpt-4o --judge-provider openai     # custom judge
-  python run.py --gt-dir /path/to/gt --models-dir /path/to/models
-        """,
-    )
-
+    parser = argparse.ArgumentParser(description="Run E2: KEX Comparison Experiment")
     parser.add_argument("--base-dir", type=str, default=None)
     parser.add_argument("--gt-dir", type=str, default=None)
     parser.add_argument("--models-dir", type=str, default=None)
@@ -42,15 +31,20 @@ Examples:
     parser.add_argument("--no-dedup", action="store_true", help="Skip dedup analysis")
     parser.add_argument("--dedup-batch-size", type=int, default=10, help="Batch size for dedup LLM calls")
     parser.add_argument("--dedup-threshold", type=float, default=0.80, help="Similarity threshold for dedup")
-
     args = parser.parse_args()
 
+    # Load configuration
     cfg = E2Config.from_dirs(
         base_dir=args.base_dir,
         ground_truth_dir=args.gt_dir,
         models_dir=args.models_dir,
         output_dir=args.output,
     )
+    
+    # Print configuration for debugging
+    print(f"Ground truth dir: {cfg.ground_truth_dir}")
+    print(f"Models dir: {cfg.models_dir}")
+    print(f"Results dir: {cfg.results_dir}")
 
     cfg.figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -111,7 +105,7 @@ Examples:
     judge = LLMJudge(judge_cfg)
 
     print("Running evaluation...")
-    results = run_evaluation(data, judge, metric_cfg, dedup_cfg)
+    results = run_evaluation(data, judge, metric_cfg, dedup_cfg, cfg)
     print(f"  Evaluated {len(data.pages)} pages across {len(data.model_names)} models")
     print()
 
@@ -137,7 +131,7 @@ Examples:
     print("MODEL RANKING (by overall score):")
     for entry in report.get("ranking", []):
         print(f"  #{entry['rank']}: {entry['model']}")
-        print(f"       Score={entry['overall_score']:.3f} | F1={entry['structural_f1']:.3f} | Content={entry['content_avg']:.3f} | CrossRef={entry['cross_ref_avg']:.3f} | Semantic={entry['semantic_avg']:.3f}")
+        print(f"       Score={entry['overall_score']:.3f} | F1={entry['structural_f1']:.3f} | Content={entry['content_avg']:.3f} | CrossRef={entry['cross_ref_avg']:.3f} | Semantic={entry['semantic_avg']:.3f} | Dedup={entry.get('dedup_avg', 0):.3f}")
 
     print()
     print("=" * 60)

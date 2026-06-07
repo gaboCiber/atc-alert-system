@@ -1,73 +1,10 @@
-from dataclasses import dataclass, field
+import hashlib
+import json
+import os
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Any, Dict, Optional
 
-
-@dataclass
-class E2Config:
-    base_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent)
-
-    ground_truth_dir: Path = field(init=False)
-    models_dir: Path = field(init=False)
-    results_dir: Path = field(init=False)
-    figures_dir: Path = field(init=False)
-
-    def __post_init__(self):
-        self.ground_truth_dir = self.base_dir / "ground_truth"
-        self.models_dir = self.base_dir / "models"
-        self.results_dir = self.base_dir / "results"
-        self.figures_dir = self.results_dir / "figures"
-
-    @classmethod
-    def from_dirs(
-        cls,
-        base_dir: Optional[str] = None,
-        ground_truth_dir: Optional[str] = None,
-        models_dir: Optional[str] = None,
-        output_dir: Optional[str] = None,
-    ):
-        base = Path(base_dir) if base_dir else Path(__file__).parent.parent
-        cfg = cls(base_dir=base)
-        if ground_truth_dir:
-            cfg.ground_truth_dir = Path(ground_truth_dir)
-        if models_dir:
-            cfg.models_dir = Path(models_dir)
-        if output_dir:
-            cfg.results_dir = Path(output_dir)
-            cfg.figures_dir = cfg.results_dir / "figures"
-        return cfg
-
-
-@dataclass
-class JudgeConfig:
-    model_name: str = "llama3.2"
-    provider: Literal["openai", "gemini", "anthropic", "ollama"] = "openai"
-    base_url: str = "http://localhost:11434/v1"
-    api_key: str = "ollama"
-    max_retries: int = 3
-    timeout: int = 120
-    enabled: bool = True
-    skip_on_error: bool = True
-
-
-@dataclass
-class DedupConfig:
-    enabled: bool = True
-    batch_size: int = 10
-    threshold: float = 0.80
-
-
-@dataclass
-class MetricConfig:
-    structural_weight: float = 0.15
-    content_weight: float = 0.10
-    cross_ref_weight: float = 0.15
-    dedup_weight: float = 0.20
-    semantic_weight: float = 0.40
-
-    fuzzy_threshold: float = 70.0
-    visualization_dpi: int = 150
-    visualization_style: str = "seaborn-v0.8-darkgrid"
+from .config import E2Config, JudgeConfig, MetricConfig, DedupConfig, get_config_hash
 
 
 def get_config_hash(
@@ -79,9 +16,6 @@ def get_config_hash(
     Compute a hash of the configuration that affects the evaluation results.
     We include the judge config, metric config, and dedup config (if provided).
     """
-    import hashlib
-    import json
-    
     # We'll convert the configs to dictionaries and then to a JSON string for hashing.
     # We exclude fields that are not relevant to the computation (like paths, etc.)
     judge_dict = {
@@ -121,3 +55,63 @@ def get_config_hash(
     }
     config_json = json.dumps(config_dict, sort_keys=True)
     return hashlib.sha256(config_json.encode()).hexdigest()
+
+
+def ensure_checkpoint_dir(results_dir: Path) -> Path:
+    """
+    Ensure the checkpoint directory exists and return its path.
+    """
+    checkpoint_dir = results_dir / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    return checkpoint_dir
+
+
+def save_checkpoint(
+    results_dir: Path,
+    prefix: str,
+    identifier: str,
+    data: Dict[str, Any],
+    config_hash: str,
+) -> None:
+    """
+    Save a checkpoint to the results/checkpoints directory.
+    The checkpoint file is named: {prefix}_{identifier}.json
+    The data stored includes the actual data and the config_hash for validation.
+    """
+    checkpoint_dir = ensure_checkpoint_dir(results_dir)
+    checkpoint_file = checkpoint_dir / f"{prefix}_{identifier}.json"
+    to_save = {
+        "config_hash": config_hash,
+        "data": data,
+    }
+    with open(checkpoint_file, "w", encoding="utf-8") as f:
+        json.dump(to_save, f, indent=2)
+
+
+def load_checkpoint(
+    results_dir: Path,
+    prefix: str,
+    identifier: str,
+    expected_config_hash: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Load a checkpoint if it exists and the config hash matches.
+    Returns the data if valid, otherwise None.
+    """
+    checkpoint_dir = results_dir / "checkpoints"
+    if not checkpoint_dir.exists():
+        return None
+    checkpoint_file = checkpoint_dir / f"{prefix}_{identifier}.json"
+    if not checkpoint_file.exists():
+        return None
+    try:
+        with open(checkpoint_file, "r", encoding="utf-8") as f:
+            checkpoint = json.load(f)
+        if checkpoint.get("config_hash") == expected_config_hash:
+            return checkpoint.get("data")
+        else:
+            # Config hash mismatch, we should not use this checkpoint.
+            return None
+    except (json.JSONDecodeError, KeyError, IOError):
+        # If there's any error in reading, we ignore the checkpoint.
+        return None

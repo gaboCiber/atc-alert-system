@@ -2,12 +2,13 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from tqdm import tqdm
 
-from config import E2Config, JudgeConfig, MetricConfig, DedupConfig
-from loader import ExperimentData, KexPageResult
-from matcher import match_all_types, MatchingOutput, KEX_TYPES
-from metrics import PageMetrics, compute_page_metrics, PageTypeMetrics
-from llm_judge import LLMJudge, Judgment
-from dedup import DedupReport, analyze_model
+from .config import E2Config, JudgeConfig, MetricConfig, DedupConfig, get_config_hash
+from .loader import ExperimentData, KexPageResult
+from .matcher import match_all_types, MatchingOutput, KEX_TYPES
+from .metrics import PageMetrics, compute_page_metrics, PageTypeMetrics
+from .llm_judge import LLMJudge, Judgment
+from .dedup import DedupReport, analyze_model
+from .checkpoint import save_checkpoint, load_checkpoint
 
 
 @dataclass
@@ -29,6 +30,7 @@ class ModelPageMetrics:
     structural_metrics: PageMetrics
     semantic_scores: Dict[str, SemanticScores] = field(default_factory=dict)
     overall_semantic: float = 0.0
+    dedup_score: float = 0.0
     overall_score: float = 0.0
 
 
@@ -65,6 +67,7 @@ def _compute_summary(
     s.content_avg = sum(pm.structural_metrics.overall_content for pm in page_metrics_list) / max(len(page_metrics_list), 1)
     s.cross_ref_avg = sum(pm.structural_metrics.overall_cross_ref for pm in page_metrics_list) / max(len(page_metrics_list), 1)
     s.semantic_avg = sum(pm.overall_semantic for pm in page_metrics_list) / max(len(page_metrics_list), 1)
+    s.dedup_avg = sum(pm.dedup_score for pm in page_metrics_list) / max(len(page_metrics_list), 1)
 
     for kex_type in KEX_TYPES:
         f1s = []
@@ -90,6 +93,7 @@ def _compute_summary(
         metric_cfg.structural_weight * s.structural_f1
         + metric_cfg.content_weight * s.content_avg
         + metric_cfg.cross_ref_weight * s.cross_ref_avg
+        + metric_cfg.dedup_weight * s.dedup_avg
         + metric_cfg.semantic_weight * s.semantic_avg
     )
 
@@ -113,6 +117,7 @@ class EvaluationResults:
                     "model": pm.model,
                     "overall_score": pm.overall_score,
                     "overall_semantic": pm.overall_semantic,
+                    "dedup_score": pm.dedup_score,
                     "structural": {
                         "overall_precision": pm.structural_metrics.overall_precision,
                         "overall_recall": pm.structural_metrics.overall_recall,
@@ -191,78 +196,188 @@ def run_evaluation(
     judge: LLMJudge,
     metric_cfg: MetricConfig,
     dedup_cfg: Optional[DedupConfig] = None,
+    e2_cfg: Optional[E2Config] = None,
 ) -> EvaluationResults:
-    page_results: Dict[str, List[ModelPageMetrics]] = {model: [] for model in data.model_names}
-
-    for page in tqdm(data.pages, desc="Evaluating pages"):
-        gt = data.ground_truth[page]
-
-        for model_name in data.model_names:
-            model_result = data.model_results[model_name]
-            if page not in model_result.pages:
-                continue
-            model_page = model_result.pages[page]
-
-            matchings = match_all_types(gt, model_page)
-            structural = compute_page_metrics(page, gt, model_page, matchings)
-
-            semantic_scores: Dict[str, SemanticScores] = {}
-            for kex_type in KEX_TYPES:
-                matching = matchings.get(kex_type)
-                if not matching:
-                    continue
-
-                scores = []
-                explanations = []
-                for match in tqdm(matching.matches, desc=f"  Judging {kex_type} matches", leave=False):
-                    judgment = judge.judge(kex_type, match.gt_item, match.model_item)
-                    if judgment:
-                        scores.append(judgment.similarity_score)
-                        explanations.append(judgment.explanation)
-
-                semantic_scores[kex_type] = SemanticScores(
-                    kex_type=kex_type,
-                    scores=scores,
-                    explanations=explanations,
-                )
-
-            all_sem = [ss.mean_score for ss in semantic_scores.values() if ss.scores]
-            overall_semantic = sum(all_sem) / len(all_sem) if all_sem else 0.0
-
-            overall_score = (
-                metric_cfg.structural_weight * structural.overall_f1
-                + metric_cfg.content_weight * structural.overall_content
-                + metric_cfg.cross_ref_weight * structural.overall_cross_ref
-                + metric_cfg.semantic_weight * overall_semantic
-            )
-
-            mpm = ModelPageMetrics(
-                page=page,
-                model=model_name,
-                structural_metrics=structural,
-                semantic_scores=semantic_scores,
-                overall_semantic=overall_semantic,
-                overall_score=overall_score,
-            )
-            page_results[model_name].append(mpm)
-
-    summaries: Dict[str, ModelSummaryMetrics] = {}
-    for model_name in data.model_names:
-        summaries[model_name] = _compute_summary(model_name, page_results[model_name], metric_cfg)
-
+    # Pre-compute dedup reports if dedup is enabled
     dedup_reports: Dict[str, DedupReport] = {}
     if dedup_cfg and dedup_cfg.enabled and judge.client is not None:
         print("\nRunning dedup analysis...")
         for model_name in tqdm(data.model_names, desc="Dedup models"):
+            # Try to load dedup checkpoint first
+            config_hash = get_config_hash(judge.config, metric_cfg, dedup_cfg)
+            dedup_checkpoint_data = load_checkpoint(
+                e2_cfg.results_dir,
+                "dedup",
+                model_name,
+                config_hash
+            )
+            
+            if dedup_checkpoint_data is not None:
+                # Reconstruct DedupReport from checkpointed data
+                report = DedupReport.from_dict(dedup_checkpoint_data)
+                dedup_reports[model_name] = report
+                continue
+            
+            # Compute dedup analysis for this model (with intra-model checkpointing)
             model_result = data.model_results[model_name]
             report = analyze_model(
                 model_result=model_result,
                 judge=judge,
                 batch_size=dedup_cfg.batch_size,
                 threshold=dedup_cfg.threshold,
+                results_dir=e2_cfg.results_dir,
+                config_hash=config_hash,
             )
             dedup_reports[model_name] = report
-
+            
+            # Save outer checkpoint for this model's dedup report (marks full completion)
+            save_checkpoint(
+                e2_cfg.results_dir,
+                "dedup",
+                model_name,
+                report.to_dict(),
+                config_hash
+            )
+    
+    page_results: Dict[str, List[ModelPageMetrics]] = {model: [] for model in data.model_names}
+    
+    for page in tqdm(data.pages, desc="Evaluating pages"):
+        gt = data.ground_truth[page]
+        
+        for model_name in data.model_names:
+            model_result = data.model_results[model_name]
+            if page not in model_result.pages:
+                print(f"DEBUG: Page {page} not in model {model_name} pages: {list(model_result.pages.keys())}")
+                continue
+            model_page = model_result.pages[page]
+            print(f"DEBUG: Evaluating page {page} for model {model_name}")
+            
+            matchings = match_all_types(gt, model_page)
+            structural = compute_page_metrics(page, gt, model_page, matchings)
+            
+            semantic_scores: Dict[str, SemanticScores] = {}
+            chunk_semantic_scores = []  # For averaging across chunks
+            
+            # Get config hash for checkpoint validation
+            config_hash = get_config_hash(judge.config, metric_cfg, dedup_cfg)
+            
+            # Try to load checkpoint for this page
+            page_checkpoint_data = load_checkpoint(
+                e2_cfg.results_dir, 
+                f"holistic_page_{model_name}", 
+                str(page), 
+                config_hash
+            )
+            print(f"DEBUG: For {model_name} page {page}, checkpoint data: {'found' if page_checkpoint_data is not None else 'not found'}")
+            
+            if page_checkpoint_data is not None:
+                # Use checkpointed results
+                semantic_scores = {}
+                for kex_type, score_data in page_checkpoint_data["semantic_scores"].items():
+                    semantic_scores[kex_type] = SemanticScores(
+                        kex_type=kex_type,
+                        scores=score_data["scores"],
+                        explanations=score_data["explanations"],
+                    )
+                overall_semantic = page_checkpoint_data["overall_semantic"]
+            else:
+                # Compute holistic evaluation for this page
+                # Holistic semantic evaluation by chunk
+                for chunk_idx in range(max(gt.chunk_count(), model_page.chunk_count())):
+                    gt_chunk_items_by_type = {}
+                    model_chunk_items_by_type = {}
+                    
+                    # Collect items by type for this chunk
+                    for kex_type in KEX_TYPES:
+                        gt_chunk_items_by_type[kex_type] = gt.get_chunk_by_type(chunk_idx, kex_type)
+                        model_chunk_items_by_type[kex_type] = model_page.get_chunk_by_type(chunk_idx, kex_type)
+                    
+                    # Evaluate each type holistically for this chunk
+                    chunk_type_scores = []
+                    for kex_type in KEX_TYPES:
+                        gt_items = gt_chunk_items_by_type[kex_type]
+                        model_items = model_chunk_items_by_type[kex_type]
+                        
+                        judgment = judge.holistic_judge(kex_type, gt_items, model_items)
+                        if judgment:
+                            chunk_type_scores.append(judgment.similarity_score)
+                    
+                    if chunk_type_scores:
+                        chunk_semantic_score = sum(chunk_type_scores) / len(chunk_type_scores)
+                        chunk_semantic_scores.append(chunk_semantic_score)
+                
+                # Calculate overall semantic score as average across chunks
+                overall_semantic = sum(chunk_semantic_scores) / len(chunk_semantic_scores) if chunk_semantic_scores else 0.0
+                
+                # For backward compatibility, also populate semantic_scores with chunk-averaged values per type
+                # (This maintains the existing interface for reporting)
+                for kex_type in KEX_TYPES:
+                    type_scores = []
+                    explanations = []
+                    # Re-evaluate per type for detailed reporting (could be optimized)
+                    for chunk_idx in range(max(gt.chunk_count(), model_page.chunk_count())):
+                        gt_items = gt.get_chunk_by_type(chunk_idx, kex_type)
+                        model_items = model_page.get_chunk_by_type(chunk_idx, kex_type)
+                        judgment = judge.holistic_judge(kex_type, gt_items, model_items)
+                        if judgment:
+                            type_scores.append(judgment.similarity_score)
+                            explanations.append(judgment.explanation)
+                    
+                    semantic_scores[kex_type] = SemanticScores(
+                        kex_type=kex_type,
+                        scores=type_scores,
+                        explanations=explanations,
+                    )
+                
+                # Save checkpoint for this page
+                checkpoint_data = {
+                    "semantic_scores": {
+                        k: {"scores": ss.scores, "explanations": ss.explanations, "mean_score": ss.mean_score}
+                        for k, ss in semantic_scores.items()
+                    },
+                    "overall_semantic": overall_semantic,
+                }
+                save_checkpoint(
+                    e2_cfg.results_dir,
+                    f"holistic_page_{model_name}",
+                    str(page),
+                    checkpoint_data,
+                    config_hash
+                )
+            
+            # Calculate dedup score for this model-page if dedup is enabled
+            dedup_score = 0.0
+            if dedup_cfg and dedup_cfg.enabled and model_name in dedup_reports:
+                report = dedup_reports[model_name]
+                # Normalize dedup rate to a score (lower dedup rate = higher score)
+                # overall_duplication_rate is percentage of items that are duplicates (0-1)
+                # We want: 0% dup -> 1.0 score, 100% dup -> 0.0 score
+                dedup_score = 1.0 - min(report.overall_duplication_rate, 1.0)
+            
+            overall_score = (
+                metric_cfg.structural_weight * structural.overall_f1
+                + metric_cfg.content_weight * structural.overall_content
+                + metric_cfg.cross_ref_weight * structural.overall_cross_ref
+                + metric_cfg.dedup_weight * dedup_score  # Dedup weight: 20%
+                + metric_cfg.semantic_weight * overall_semantic  # Semantic weight: 40% (reduced from 60%)
+            )
+            
+            mpm = ModelPageMetrics(
+                page=page,
+                model=model_name,
+                structural_metrics=structural,
+                semantic_scores=semantic_scores,
+                overall_semantic=overall_semantic,
+                dedup_score=dedup_score,
+                overall_score=overall_score,
+            )
+            page_results[model_name].append(mpm)
+    
+    # Compute summary metrics for each model
+    summaries: Dict[str, ModelSummaryMetrics] = {}
+    for model_name in data.model_names:
+        summaries[model_name] = _compute_summary(model_name, page_results[model_name], metric_cfg)
+    
     return EvaluationResults(
         model_names=data.model_names,
         pages=data.pages,

@@ -98,11 +98,11 @@ E2_kex_comparison/
 | **Validity Ratio** | % of internal references that point to existing items |
 | **Broken Refs** | List of invalid references |
 
-### Semantic (60%)
+### Semantic (40%)
 | Metric | Description |
 |--------|-------------|
-| **LLM Judge Score** | 0-1 similarity score per matched pair |
-| **Explanation** | LLM explanation for each score |
+| **LLM Judge Score** | 0-1 semantic equivalence score per chunk (holistic set comparison) |
+| **Explanation** | LLM explanation for the chunk-level semantic evaluation |
 
 ### Dedup Detection (Diagnostic)
 | Metric | Description |

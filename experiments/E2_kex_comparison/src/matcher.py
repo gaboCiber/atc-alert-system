@@ -135,7 +135,7 @@ def match_all_types(
     model_page: "KexPageResult",
     threshold: float = 0.70,
 ) -> Dict[str, MatchingOutput]:
-    from loader import KexPageResult
+    from .loader import KexPageResult
 
     results: Dict[str, MatchingOutput] = {}
     for kex_type in KEX_TYPES:

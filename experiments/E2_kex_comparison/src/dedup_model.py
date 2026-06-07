@@ -11,16 +11,17 @@ Usage:
   uv run scripts/dedup_model.py --model-dir models/gemini-3-flash-preview --judge-model llama3.2 --no-save
 """
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import JudgeConfig, DedupConfig
-from loader import load_model_pages
-from llm_judge import LLMJudge
-from dedup import analyze_model, format_card
+from src.config import JudgeConfig, DedupConfig
+from src.loader import load_model_pages
+from src.llm_judge import LLMJudge
+from src.dedup import analyze_model, format_card
 
 
 def main():
@@ -34,6 +35,8 @@ def main():
     parser.add_argument("--judge-provider", type=str, default="openai", choices=["openai", "ollama", "gemini", "anthropic"])
     parser.add_argument("--judge-base-url", type=str, default="http://localhost:11434/v1")
     parser.add_argument("--judge-api-key", type=str, default="ollama")
+    parser.add_argument("--results-dir", type=str, default=None,
+                        help="Directory for checkpoints (default: output dir)")
     args = parser.parse_args()
 
     model_dir = Path(args.model_dir)
@@ -59,6 +62,25 @@ def main():
         threshold=args.threshold,
     )
 
+    # Generate config hash for checkpoint validation
+    dedup_config_hash = hashlib.sha256(
+        json.dumps({
+            "judge": {
+                "model_name": judge_cfg.model_name,
+                "provider": judge_cfg.provider,
+                "base_url": judge_cfg.base_url,
+                "api_key": judge_cfg.api_key,
+            },
+            "dedup": {
+                "batch_size": dedup_cfg.batch_size,
+                "threshold": dedup_cfg.threshold,
+            },
+        }, sort_keys=True).encode()
+    ).hexdigest()
+
+    output_dir = Path(args.output) if args.output else model_dir
+    results_dir = Path(args.results_dir) if args.results_dir else output_dir
+
     print(f"Loading model: {model_dir.name}")
     model_result = load_model_pages(model_dir)
     if not model_result.available_pages:
@@ -67,6 +89,8 @@ def main():
     print(f"  Pages: {model_result.available_pages}")
     print(f"  Judge: {judge_cfg.model_name} ({provider})")
     print(f"  Batch: {dedup_cfg.batch_size}, threshold: {dedup_cfg.threshold}")
+    if results_dir:
+        print(f"  Checkpoints: {results_dir / 'checkpoints' / f'dedup_intra_{model_dir.name}.json'}")
     print()
 
     judge = LLMJudge(judge_cfg)
@@ -75,13 +99,14 @@ def main():
         judge=judge,
         batch_size=dedup_cfg.batch_size,
         threshold=dedup_cfg.threshold,
+        results_dir=results_dir,
+        config_hash=dedup_config_hash,
     )
 
     card = format_card(report)
     print(card)
 
     if not args.no_save:
-        output_dir = Path(args.output) if args.output else model_dir
         output_dir.mkdir(parents=True, exist_ok=True)
 
         json_path = output_dir / f"dedup_{model_dir.name}.json"
