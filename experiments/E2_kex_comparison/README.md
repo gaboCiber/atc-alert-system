@@ -26,16 +26,16 @@ E2_kex_comparison/
 │   ├── matcher.py           # Fuzzy matching GT ↔ model
 │   ├── metrics.py           # Structural + content + cross-ref metrics
 │   ├── llm_judge.py         # LLM-as-a-judge with Instructor
+│   ├── checkpoint.py       # Checkpoint save/load for holistic & dedup evaluation
 │   ├── dedup_prompts.py     # Batch LLM prompts for semantic dedup detection
 │   ├── dedup.py             # Cross-page semantic dedup (UnionFind, clustering, report)
+│   ├── dedup_model.py       # Standalone dedup tool for pseudo-GT creation
 │   ├── evaluator.py         # Orchestrate evaluation
 │   ├── report.py            # Generate JSON results + PNG figures
 │   └── run.py               # CLI entry point
 │
-├── scripts/
-│   └── dedup_model.py       # Standalone dedup tool for pseudo-GT creation
-│
 ├── results/
+│   ├── checkpoints/                  # Intra-model checkpoints for resume
 │   ├── page_metrics.json             # Per-page detailed metrics
 │   ├── summary.json                   # Ranking + aggregated scores
 │   └── figures/
@@ -54,28 +54,36 @@ E2_kex_comparison/
 ## Usage
 
 ```bash
-# Using project venv
-/path/to/.venv/bin/python src/run.py
+# Full evaluation (all metrics + dedup + holistic semantic)
+uv run python src/run.py
 
-# Skip LLM judge (faster, structural only)
-/path/to/.venv/bin/python src/run.py --no-judge
+# Using Ollama as judge
+uv run python src/run.py --judge-provider ollama --judge-model gemma4:31b-cloud
 
-# Custom LLM judge
-/path/to/.venv/bin/python src/run.py \
+# Custom OpenAI-compatible judge
+uv run python src/run.py \
     --judge-model gpt-4o \
     --judge-provider openai \
     --judge-api-key $OPENAI_API_KEY
 
-# Custom weights
-/path/to/.venv/bin/python src/run.py --semantic-weight 0.75
+# Skip LLM judge (structural/content/cross-ref only)
+uv run python src/run.py --no-judge
 
 # Disable dedup detection (enabled by default)
-/path/to/.venv/bin/python src/run.py --no-dedup
+uv run python src/run.py --no-dedup
+
+# Dedup tuning
+uv run python src/run.py --dedup-threshold 0.85 --dedup-batch-size 15
 
 # Standalone: analyze duplicates in a model output (pseudo-GT debugging)
-/path/to/.venv/bin/python scripts/dedup_model.py \
+uv run python src/dedup_model.py \
     --model-dir models/"ICAO Standard Phraseology(gemma4:31b-cloud)" \
     --threshold 0.80 --batch-size 10
+
+# Standalone with checkpointing (resume if interrupted)
+uv run python src/dedup_model.py \
+    --model-dir models/"ICAO Standard Phraseology(gemma4:31b-cloud)" \
+    --results-dir ./checkpoints
 ```
 
 ## Metrics
@@ -119,7 +127,8 @@ Weighted combination:
 - Structural F1: 15%
 - Content Match: 10%
 - Cross-Ref Validity: 15%
-- LLM Semantic: 60%
+- Dedup Score: 20% (penalizes intra-model semantic redundancy)
+- LLM Semantic: 40% (holistic set comparison per chunk)
 
 ## Matching Strategy
 
@@ -134,13 +143,14 @@ Threshold: 70% similarity → match (configurable via `--fuzzy-threshold`)
 
 ## LLM-as-a-Judge
 
-- Uses `common/llm_client_factory.py` (Instructor)
-- **Schema Pydantic**: `Judgment(similarity_score, explanation, matched_fields, unmatched_fields)` (pairwise)
-- **Schema Pydantic**: `BatchJudgment(result: list[CandidateJudgment])` (batch)
+- Uses `common/llm_client_factory.py` (Instructor for structured output)
+- **Holistic evaluation**: one LLM call per chunk × per type, comparing all GT items vs all model items in a single prompt. Enables natural 1:N and N:1 mappings.
+- **Schema Pydantic**: `HolisticJudgment(overall_score, explanation, type_scores)` (per chunk)
+- **Dedup batch**: `BatchJudgment(result: list[CandidateJudgment])` with `similarity_score`, `is_duplicate`, `explanation`
 - **Blind**: model name is never revealed to the judge
-- **One call per matched pair** for maximum precision (evaluation)
-- **One call per reference vs N candidates** for dedup (batch, triangular matrix)
-- **Type-specific prompts** for each knowledge type
+- **Type-specific prompts** for each knowledge type (entities, relationships, events, rules, procedures)
+- **Short-circuit exact match**: identical normalized texts skip the LLM (score = 1.0)
+- **Checkpointing**: progress saved per page (holistic) and per type+batch (dedup) for resume on interruption
 
 ## Error Analysis
 
@@ -152,6 +162,9 @@ Automatically reads `pagina_N_errors.json` files and includes:
 ## Output
 
 - `page_metrics.json`: Every page, every model, every metric, every type
-- `summary.json`: Model ranking by overall score
+- `summary.json`: Model ranking by overall score (includes Dedup= and Semantic=)
 - `dedup_{model}.json`: Per-model duplicate cluster report (when dedup enabled)
+- `checkpoints/`: Intra-model checkpoints for holistic and dedup evaluation (auto-resume)
+  - `holistic_page_{model}_{page}.json`
+  - `dedup_intra_{model}.json`
 - `figures/`: 8 visualization PNGs

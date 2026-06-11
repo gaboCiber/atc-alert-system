@@ -11,6 +11,11 @@ from .dedup_prompts import FIELD_EXTRACTORS
 KEX_TYPES = ["entities", "relationships", "events", "rules", "procedures"]
 
 
+class DedupInterruptedError(Exception):
+    """Raised when dedup analysis is interrupted by an LLM call failure."""
+    pass
+
+
 class UnionFind:
     def __init__(self, n: int):
         self.parent = list(range(n))
@@ -399,11 +404,25 @@ def build_clusters(
                 completed.add((ref_idx, batch_start))
                 continue
 
-            result = judge.batch_judge(
-                kex_type,
-                ref_item.item,
-                [ci.item for ci in batch_candidates],
-            )
+            try:
+                result = judge.batch_judge(
+                    kex_type,
+                    ref_item.item,
+                    [ci.item for ci in batch_candidates],
+                )
+            except Exception as e:
+                # Save checkpoint before propagating
+                if on_batch_complete:
+                    on_batch_complete({
+                        "uf_parent": list(uf.parent),
+                        "uf_rank": list(uf.rank),
+                        "edge_scores": _serialize_edge_scores(edge_scores),
+                        "completed_batches": [list(p) for p in completed],
+                        "items_count": n,
+                    })
+                raise DedupInterruptedError(
+                    f"LLM call failed at {kex_type} ref={ref_idx} batch={batch_start}: {e}"
+                ) from e
 
             if result is None or not result.judgments:
                 completed.add((ref_idx, batch_start))
@@ -465,23 +484,36 @@ def analyze_model(
     threshold: float = 0.80,
     results_dir: Optional[Path] = None,
     config_hash: Optional[str] = None,
+    skip_types: Optional[set] = None,
 ) -> DedupReport:
     model_name = model_result.model_name
     by_type: Dict[str, DedupTypeMetrics] = {}
+    skip_types = skip_types or set()
 
     ckptr = None
     if results_dir and config_hash:
         ckptr = DedupCheckpointer(results_dir, model_name, config_hash)
-        for kt in ckptr.completed_types:
+        for kt in list(ckptr.completed_types):
+            if kt in skip_types:
+                ckptr.completed_types.discard(kt)
+                continue
             m = ckptr.get_metrics(kt)
             if m is not None:
                 by_type[kt] = m
+        if ckptr.in_progress and ckptr.in_progress.get("kex_type") in skip_types:
+            ckptr.in_progress = None
 
     completed = set(by_type.keys())
+
+    for kex_type in skip_types:
+        by_type[kex_type] = DedupTypeMetrics(kex_type=kex_type, total_items=0, clusters=[])
 
     pbar = tqdm(total=len(KEX_TYPES), desc=f"  Dedup {model_name}", initial=len(completed))
     for kex_type in KEX_TYPES:
         if kex_type in completed:
+            pbar.update(1)
+            continue
+        if kex_type in skip_types:
             pbar.update(1)
             continue
 
@@ -516,7 +548,7 @@ def analyze_model(
 
     pbar.close()
 
-    if ckptr:
+    if ckptr and not skip_types:
         ckptr.cleanup()
 
     return DedupReport(model_name=model_name, by_type=by_type)
