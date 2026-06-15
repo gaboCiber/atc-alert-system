@@ -2,7 +2,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 from .config import E2Config, JudgeConfig, MetricConfig, DedupConfig, get_config_hash
 
@@ -115,3 +115,63 @@ def load_checkpoint(
     except (json.JSONDecodeError, KeyError, IOError):
         # If there's any error in reading, we ignore the checkpoint.
         return None
+
+
+class HolisticCheckpointer:
+    """Intra-page checkpointing for holistic_judge calls.
+
+    Saves progress after each completed chunk so evaluation resumes
+    from the last completed chunk, not from scratch, if interrupted.
+    """
+    def __init__(
+        self, results_dir: Path, model_name: str, page: int, config_hash: str
+    ):
+        self.path = results_dir / "checkpoints" / f"holistic_intra_{model_name}_page{page}.json"
+        self.model_name = model_name
+        self.page = page
+        self.config_hash = config_hash
+        self.completed_chunks: Set[int] = set()
+        self.chunk_data: Dict[int, Dict[str, Dict[str, Any]]] = {}
+        self._load()
+
+    def _load(self):
+        if not self.path.exists():
+            return
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if data.get("config_hash") != self.config_hash:
+                return
+            self.completed_chunks = set(data.get("completed_chunks", []))
+            self.chunk_data = {int(k): v for k, v in data.get("chunk_data", {}).items()}
+        except (json.JSONDecodeError, KeyError, IOError):
+            pass
+
+    def _save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        data: Dict[str, Any] = {
+            "config_hash": self.config_hash,
+            "model_name": self.model_name,
+            "page": self.page,
+            "completed_chunks": sorted(self.completed_chunks),
+            "chunk_data": {str(k): v for k, v in self.chunk_data.items()},
+        }
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+    def is_chunk_completed(self, chunk_idx: int) -> bool:
+        return chunk_idx in self.completed_chunks
+
+    def mark_chunk_completed(
+        self, chunk_idx: int, per_type_data: Dict[str, Dict[str, Any]]
+    ):
+        self.completed_chunks.add(chunk_idx)
+        self.chunk_data[chunk_idx] = per_type_data
+        self._save()
+
+    def get_chunk_data(self, chunk_idx: int) -> Optional[Dict[str, Dict[str, Any]]]:
+        return self.chunk_data.get(chunk_idx)
+
+    def cleanup(self):
+        if self.path.exists():
+            self.path.unlink()

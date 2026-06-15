@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from tqdm import tqdm
 
 from .config import E2Config, JudgeConfig, MetricConfig, DedupConfig, get_config_hash
@@ -8,7 +8,7 @@ from .matcher import match_all_types, MatchingOutput, KEX_TYPES
 from .metrics import PageMetrics, compute_page_metrics, PageTypeMetrics
 from .llm_judge import LLMJudge, Judgment
 from .dedup import DedupReport, analyze_model
-from .checkpoint import save_checkpoint, load_checkpoint
+from .checkpoint import save_checkpoint, load_checkpoint, HolisticCheckpointer
 
 
 @dataclass
@@ -256,7 +256,6 @@ def run_evaluation(
             structural = compute_page_metrics(page, gt, model_page, matchings)
             
             semantic_scores: Dict[str, SemanticScores] = {}
-            chunk_semantic_scores = []  # For averaging across chunks
             
             # Get config hash for checkpoint validation
             config_hash = get_config_hash(judge.config, metric_cfg, dedup_cfg)
@@ -281,55 +280,77 @@ def run_evaluation(
                     )
                 overall_semantic = page_checkpoint_data["overall_semantic"]
             else:
-                # Compute holistic evaluation for this page
-                # Holistic semantic evaluation by chunk
-                for chunk_idx in range(max(gt.chunk_count(), model_page.chunk_count())):
+                max_chunks = max(gt.chunk_count(), model_page.chunk_count())
+                tracker = HolisticCheckpointer(
+                    e2_cfg.results_dir, model_name, page, config_hash
+                )
+
+                per_type_chunk_data: Dict[int, Dict[str, Dict[str, Any]]] = {}
+
+                for chunk_idx in range(max_chunks):
+                    if tracker.is_chunk_completed(chunk_idx):
+                        per_type_chunk_data[chunk_idx] = tracker.get_chunk_data(chunk_idx)
+                        continue
+
                     gt_chunk_items_by_type = {}
                     model_chunk_items_by_type = {}
-                    
-                    # Collect items by type for this chunk
                     for kex_type in KEX_TYPES:
                         gt_chunk_items_by_type[kex_type] = gt.get_chunk_by_type(chunk_idx, kex_type)
                         model_chunk_items_by_type[kex_type] = model_page.get_chunk_by_type(chunk_idx, kex_type)
-                    
-                    # Evaluate each type holistically for this chunk
-                    chunk_type_scores = []
+
+                    chunk_type_data: Dict[str, Dict[str, Any]] = {}
                     for kex_type in KEX_TYPES:
                         gt_items = gt_chunk_items_by_type[kex_type]
                         model_items = model_chunk_items_by_type[kex_type]
-                        
                         judgment = judge.holistic_judge(kex_type, gt_items, model_items)
                         if judgment:
-                            chunk_type_scores.append(judgment.similarity_score)
-                    
+                            chunk_type_data[kex_type] = {
+                                "score": judgment.similarity_score,
+                                "explanation": judgment.explanation,
+                            }
+                        else:
+                            chunk_type_data[kex_type] = {
+                                "score": None,
+                                "explanation": None,
+                            }
+
+                    tracker.mark_chunk_completed(chunk_idx, chunk_type_data)
+                    per_type_chunk_data[chunk_idx] = chunk_type_data
+
+                # Aggregate per-type scores from all chunks (single pass)
+                type_scores_agg: Dict[str, List[float]] = {kt: [] for kt in KEX_TYPES}
+                type_expl_agg: Dict[str, List[str]] = {kt: [] for kt in KEX_TYPES}
+                chunk_semantic_scores = []
+
+                for chunk_idx in range(max_chunks):
+                    chunk_type_data = per_type_chunk_data[chunk_idx]
+                    chunk_type_scores = []
+                    for kex_type in KEX_TYPES:
+                        td = chunk_type_data.get(kex_type, {})
+                        score = td.get("score")
+                        expl = td.get("explanation")
+                        if score is not None and expl is not None:
+                            type_scores_agg[kex_type].append(score)
+                            type_expl_agg[kex_type].append(expl)
+                            chunk_type_scores.append(score)
                     if chunk_type_scores:
-                        chunk_semantic_score = sum(chunk_type_scores) / len(chunk_type_scores)
-                        chunk_semantic_scores.append(chunk_semantic_score)
-                
-                # Calculate overall semantic score as average across chunks
-                overall_semantic = sum(chunk_semantic_scores) / len(chunk_semantic_scores) if chunk_semantic_scores else 0.0
-                
-                # For backward compatibility, also populate semantic_scores with chunk-averaged values per type
-                # (This maintains the existing interface for reporting)
+                        chunk_semantic_scores.append(
+                            sum(chunk_type_scores) / len(chunk_type_scores)
+                        )
+
+                overall_semantic = (
+                    sum(chunk_semantic_scores) / len(chunk_semantic_scores)
+                    if chunk_semantic_scores else 0.0
+                )
+
                 for kex_type in KEX_TYPES:
-                    type_scores = []
-                    explanations = []
-                    # Re-evaluate per type for detailed reporting (could be optimized)
-                    for chunk_idx in range(max(gt.chunk_count(), model_page.chunk_count())):
-                        gt_items = gt.get_chunk_by_type(chunk_idx, kex_type)
-                        model_items = model_page.get_chunk_by_type(chunk_idx, kex_type)
-                        judgment = judge.holistic_judge(kex_type, gt_items, model_items)
-                        if judgment:
-                            type_scores.append(judgment.similarity_score)
-                            explanations.append(judgment.explanation)
-                    
                     semantic_scores[kex_type] = SemanticScores(
                         kex_type=kex_type,
-                        scores=type_scores,
-                        explanations=explanations,
+                        scores=type_scores_agg[kex_type],
+                        explanations=type_expl_agg[kex_type],
                     )
-                
-                # Save checkpoint for this page
+
+                # Save page-level checkpoint
                 checkpoint_data = {
                     "semantic_scores": {
                         k: {"scores": ss.scores, "explanations": ss.explanations, "mean_score": ss.mean_score}
@@ -344,6 +365,7 @@ def run_evaluation(
                     checkpoint_data,
                     config_hash
                 )
+                tracker.cleanup()
             
             # Calculate dedup score for this model-page if dedup is enabled
             dedup_score = 0.0
