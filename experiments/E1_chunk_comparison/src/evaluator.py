@@ -1,11 +1,11 @@
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import Dict, List, Optional
 
 import numpy as np
 
 from config import E1Config
 from loader import ExperimentData, ModelResult
-from metrics import PageMetrics, compute_page_metrics
+from metrics import PageMetrics, compute_boundary_integrity_document, compute_page_metrics
 
 
 @dataclass
@@ -35,11 +35,17 @@ class ModelSummaryMetrics:
 
     boundary_integrity_mean: float = 0.0
     boundary_integrity_std: float = 0.0
+    boundary_integrity_detail: Dict = field(default_factory=dict)
 
     overall_score: float = 0.0
 
 
-def _compute_summary(model_name: str, page_metrics_list: List[PageMetrics]) -> ModelSummaryMetrics:
+def _compute_summary(
+    model_name: str,
+    page_metrics_list: List[PageMetrics],
+    model_result: ModelResult,
+    sentences_gt: Optional[List[str]] = None,
+) -> ModelSummaryMetrics:
     s = ModelSummaryMetrics(model=model_name, page_metrics=page_metrics_list)
 
     cca = [pm.structural.chunk_count_accuracy for pm in page_metrics_list]
@@ -58,8 +64,14 @@ def _compute_summary(model_name: str, page_metrics_list: List[PageMetrics]) -> M
     s.matched_content_f1_mean = np.mean([pm.content.matched_content_f1 for pm in page_metrics_list])
     s.matched_content_f1_std = np.std([pm.content.matched_content_f1 for pm in page_metrics_list])
 
-    s.boundary_integrity_mean = np.mean([pm.content.boundary_integrity for pm in page_metrics_list])
-    s.boundary_integrity_std = np.std([pm.content.boundary_integrity for pm in page_metrics_list])
+    all_chunks = []
+    for page in sorted(model_result.available_pages):
+        if page in model_result.pages:
+            all_chunks.extend(model_result.pages[page].chunks)
+    bi_score, bi_detail = compute_boundary_integrity_document(all_chunks, sentences_gt)
+    s.boundary_integrity_mean = bi_score
+    s.boundary_integrity_std = 0.0
+    s.boundary_integrity_detail = bi_detail
 
     weights = {
         "chunk_count_accuracy": 0.20,
@@ -105,7 +117,6 @@ class EvaluationResults:
                         "matched_content_precision": pm.content.matched_content_precision,
                         "matched_content_recall": pm.content.matched_content_recall,
                         "matched_content_f1": pm.content.matched_content_f1,
-                        "boundary_integrity": pm.content.boundary_integrity,
                     },
                 }
                 for pm in pms
@@ -132,6 +143,7 @@ class EvaluationResults:
                     "matched_content_f1_std": sm.matched_content_f1_std,
                     "boundary_integrity_mean": sm.boundary_integrity_mean,
                     "boundary_integrity_std": sm.boundary_integrity_std,
+                    "boundary_integrity_detail": sm.boundary_integrity_detail,
                 },
             }
 
@@ -143,7 +155,10 @@ class EvaluationResults:
         }
 
 
-def run_evaluation(data: ExperimentData) -> EvaluationResults:
+def run_evaluation(
+    data: ExperimentData,
+    sentences_gt: Optional[List[str]] = None,
+) -> EvaluationResults:
     page_results: Dict[str, List[PageMetrics]] = {model: [] for model in data.model_names}
 
     for page in data.pages:
@@ -158,7 +173,8 @@ def run_evaluation(data: ExperimentData) -> EvaluationResults:
 
     summaries: Dict[str, ModelSummaryMetrics] = {}
     for model_name in data.model_names:
-        summaries[model_name] = _compute_summary(model_name, page_results[model_name])
+        model_result = data.model_results[model_name]
+        summaries[model_name] = _compute_summary(model_name, page_results[model_name], model_result, sentences_gt)
 
     return EvaluationResults(
         model_names=data.model_names,

@@ -11,12 +11,14 @@ class E1Config:
     models_dir: Path = field(init=False)
     results_dir: Path = field(init=False)
     figures_dir: Path = field(init=False)
+    sentences_gt_path: Path = field(init=False)
 
     def __post_init__(self):
         self.ground_truth_dir = self.base_dir / "ground_truth"
         self.models_dir = self.base_dir / "models"
         self.results_dir = self.base_dir / "results"
         self.figures_dir = self.results_dir / "figures"
+        self.sentences_gt_path = self.base_dir / "sentences_gt.json"
 
     @classmethod
     def from_dirs(

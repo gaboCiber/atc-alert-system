@@ -280,6 +280,33 @@ def plot_page_by_page_comparison(
     return fig
 
 
+def plot_boundary_integrity_comparison(
+    results: EvaluationResults,
+    cfg: E1Config,
+) -> plt.Figure:
+    models = [_short_name(m) for m in results.model_names]
+    scores = [results.summaries[m].boundary_integrity_mean for m in results.model_names]
+
+    sorted_indices = np.argsort(scores)[::-1]
+    models = [models[i] for i in sorted_indices]
+    scores = [scores[i] for i in sorted_indices]
+
+    colors = plt.cm.viridis(np.linspace(0.3, 0.9, len(models)))
+    fig, ax = plt.subplots(figsize=(max(8, len(models) * 1.5), 6))
+    bars = ax.barh(models, scores, color=colors, edgecolor="black", linewidth=0.5)
+
+    for bar, score in zip(bars, scores):
+        ax.text(score + 0.01, bar.get_y() + bar.get_height() / 2, f"{score:.3f}", va="center", fontsize=10)
+
+    ax.set_xlabel("Boundary Integrity (document-level)", fontsize=11)
+    ax.set_title("Model Ranking by Document-Level Boundary Integrity", fontsize=13, fontweight="bold")
+    ax.set_xlim(0, 1.05)
+    ax.grid(axis="x", alpha=0.3)
+
+    plt.tight_layout()
+    return fig
+
+
 def generate_report(
     results: EvaluationResults,
     cfg: E1Config,
@@ -301,6 +328,7 @@ def generate_report(
         "content_metrics_boxplot": plot_content_metrics_boxplot(results, cfg),
         "boundary_avg_error": plot_boundary_avg_error_per_page(results, cfg),
         "page_by_page": plot_page_by_page_comparison(results, cfg),
+        "boundary_integrity_comparison": plot_boundary_integrity_comparison(results, cfg),
     }
 
     if save_figures:

@@ -106,6 +106,13 @@ def load_ground_truth(gt_dir: Path) -> Dict[int, PageChunks]:
     return pages
 
 
+def load_sentence_gt(filepath: Path) -> List[str]:
+    if not filepath.exists():
+        raise FileNotFoundError(f"Sentence GT not found: {filepath}")
+    with open(filepath, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def discover_model_dirs(models_dir: Path) -> List[Path]:
     if not models_dir.exists():
         return []

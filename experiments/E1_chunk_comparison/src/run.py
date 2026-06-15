@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import E1Config
-from loader import ExperimentData
+from loader import ExperimentData, load_sentence_gt
 from evaluator import run_evaluation
 from report import generate_report
 
@@ -100,7 +100,13 @@ Examples:
     print()
 
     print("Running evaluation...")
-    results = run_evaluation(data)
+    try:
+        sentences_gt = load_sentence_gt(cfg.sentences_gt_path)
+        print(f"  Using sentence GT: {cfg.sentences_gt_path}")
+    except FileNotFoundError:
+        sentences_gt = None
+        print("  No sentence GT found, falling back to NLTK for BoundaryIntegrity")
+    results = run_evaluation(data, sentences_gt=sentences_gt)
     print(f"  Evaluated {len(data.pages)} pages across {len(data.model_names)} models")
     print()
 

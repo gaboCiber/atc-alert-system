@@ -13,6 +13,8 @@ E1_chunk_comparison/
 │   ├── pagina_2_chunks.json
 │   └── ...
 │
+├── sentences_gt.json                  # Optional: sentence-level GT for BoundaryIntegrity
+│
 ├── models/                            # Model output directories (same format as KEX output)
 │   ├── ICAO Standard Phraseology(gemma4:e4b)/
 │   │   ├── pagina_1_chunks.json
@@ -41,7 +43,8 @@ E1_chunk_comparison/
 │       ├── radar_comparison.png
 │       ├── content_metrics_boxplot.png
 │       ├── boundary_avg_error.png
-│       └── page_by_page.png
+│       ├── page_by_page.png
+│       └── boundary_integrity_comparison.png
 │
 └── README.md
 ```
@@ -94,7 +97,7 @@ python src/run.py --no-figures
 | Metric | Description |
 |--------|-------------|
 | **Matched Content F1** | F1 on per-matched-pair chunk similarity (via bipartite matching). Each matched pair is scored by `fuzz.ratio`, unmatched chunks score 0. |
-| **Boundary Integrity** | Proportion of chunk boundaries that align with NLTK sentence boundaries. Measures segmentation quality independent of GT. |
+| **Boundary Integrity** | Proportion of chunk boundaries that align with sentence boundaries. Computed over the full document (not per-page). Uses `sentences_gt.json` if available; falls back to NLTK `sent_tokenize`. Measures segmentation quality independent of chunk-level GT. |
 
 ### Overall Score
 Weighed combination:
@@ -106,8 +109,8 @@ Weighed combination:
 ## Output
 
 - `page_metrics.json`: Every page, every model, every metric
-- `summary.json`: Model ranking by overall score with all component metrics
-- `figures/`: 8 visualization PNGs (distribution, heatmaps, radar, boxplots)
+- `summary.json`: Model ranking by overall score with all component metrics, plus `boundary_integrity_detail` (full-document breakdown)
+- `figures/`: 9 visualization PNGs (distribution, heatmaps, radar, boxplots, boundary integrity comparison)
 
 ## Creating Ground Truth
 
@@ -115,6 +118,22 @@ Weighed combination:
 2. Copy the `pagina_N_chunks.json` files to `ground_truth/`
 3. Manually correct boundaries and content
 4. Re-run: the GT stays fixed while models vary
+
+## Sentence GT for Boundary Integrity (Optional)
+
+BoundaryIntegrity measures whether chunk boundaries align with sentence boundaries. By default it uses NLTK `sent_tokenize`, but you can provide a manually-curated `sentences_gt.json` for more accurate sentence boundary detection.
+
+**Format** — a single JSON array in document order:
+
+```json
+[
+  "First sentence of the document.",
+  "Second sentence. It may span across pages.",
+  "..."
+]
+```
+
+If `sentences_gt.json` exists in the experiment directory, it is used automatically. If not, the system falls back to NLTK.
 
 ## Notes
 

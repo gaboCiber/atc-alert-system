@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import List, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from rapidfuzz import fuzz
@@ -25,7 +25,6 @@ class ContentMetrics:
     matched_content_precision: float = 0.0
     matched_content_recall: float = 0.0
     matched_content_f1: float = 0.0
-    boundary_integrity: float = 0.0
 
 
 @dataclass
@@ -164,10 +163,76 @@ def compute_matched_content_metrics(
     )
 
 
-def compute_boundary_integrity(pred: PageChunks) -> float:
+def compute_boundary_integrity_document(
+    all_chunks: List[Chunk],
+    sentences_gt: Optional[List[str]] = None,
+) -> Tuple[float, Dict]:
+    if not all_chunks:
+        return 1.0, {"num_chunks": 0, "note": "no chunks"}
+
+    norm_chunks = [" ".join(c.text.split()) for c in all_chunks]
+    full_text = " ".join(norm_chunks)
+
+    if sentences_gt is not None:
+        norm_sentences = [" ".join(s.split()) for s in sentences_gt]
+        sent_ends = []
+        pos = 0
+        for s in norm_sentences:
+            pos += len(s)
+            sent_ends.append(pos)
+            pos += 1
+    else:
+        try:
+            import nltk
+            nltk_sentences = nltk.sent_tokenize(full_text)
+        except (ImportError, LookupError):
+            import re
+            nltk_sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', full_text) if s.strip()]
+
+        sent_ends = []
+        pos = 0
+        for s in nltk_sentences:
+            pos += len(s)
+            sent_ends.append(pos)
+            pos += 1
+
+    chunk_ends = []
+    pos = 0
+    for c in norm_chunks:
+        pos += len(c)
+        chunk_ends.append(pos)
+        pos += 1
+
+    good_ends = []
+    bad_ends = []
+    for ce in chunk_ends:
+        matched = False
+        for se in sent_ends:
+            if ce == se:
+                good_ends.append(ce)
+                matched = True
+                break
+        if not matched:
+            bad_ends.append(ce)
+
+    score = len(good_ends) / len(chunk_ends) if chunk_ends else 1.0
+
+    detail = {
+        "num_chunks": len(all_chunks),
+        "full_text": full_text,
+        "sentence_ends": sent_ends,
+        "chunk_ends": chunk_ends,
+        "matched_ends": good_ends,
+        "unmatched_ends": bad_ends,
+        "score": score,
+    }
+    return score, detail
+
+
+def compute_boundary_integrity(pred: PageChunks) -> Tuple[float, Dict]:
     chunks = pred.chunks
-    if len(chunks) <= 1:
-        return 1.0
+    if not chunks:
+        return 1.0, {"num_chunks": 0, "note": "no chunks"}
 
     norm_chunks = [" ".join(c.text.split()) for c in chunks]
     full_text = " ".join(norm_chunks)
@@ -185,27 +250,43 @@ def compute_boundary_integrity(pred: PageChunks) -> float:
         sent_spans.append((pos, pos + len(s)))
         pos += len(s) + 1
 
+    sent_ends = [end for _, end in sent_spans]
+
     chunk_ends = []
     pos = 0
     for i, c in enumerate(norm_chunks):
         pos += len(c)
-        if i < len(chunks) - 1:
-            chunk_ends.append(pos)
-            pos += 1
+        chunk_ends.append(pos)
+        pos += 1
 
-    good = 0
+    good_ends = []
+    bad_ends = []
     for ce in chunk_ends:
+        matched = False
         for start, end in sent_spans:
             if ce == end:
-                good += 1
+                good_ends.append(ce)
+                matched = True
                 break
+        if not matched:
+            bad_ends.append(ce)
 
-    return good / len(chunk_ends) if chunk_ends else 1.0
+    score = len(good_ends) / len(chunk_ends) if chunk_ends else 1.0
+
+    detail = {
+        "num_chunks": len(chunks),
+        "full_text": full_text,
+        "sentence_ends": sent_ends,
+        "chunk_ends": chunk_ends,
+        "matched_ends": good_ends,
+        "unmatched_ends": bad_ends,
+        "score": score,
+    }
+    return score, detail
 
 
 def compute_page_metrics(page: int, pred: PageChunks, gt: PageChunks) -> PageMetrics:
     edges, unmatched_pred, unmatched_gt = _match_bipartite(pred.chunks, gt.chunks)
     structural = compute_structural_metrics(pred, gt, edges, unmatched_pred, unmatched_gt)
     content = compute_matched_content_metrics(pred, gt, edges, unmatched_pred, unmatched_gt)
-    content.boundary_integrity = compute_boundary_integrity(pred)
     return PageMetrics(page=page, structural=structural, content=content)
