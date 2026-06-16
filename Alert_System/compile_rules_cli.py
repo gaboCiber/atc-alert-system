@@ -42,7 +42,7 @@ def load_real_kex_rules(input_dir: str):
     
     # Usar el procesador organizado
     processor = KEXFileProcessor(str(kex_dir))
-    accumulator = processor.process_all_files(max_files=10)  # Procesar más archivos para tener más reglas
+    accumulator = processor.process_all_files()  # Procesar todos los archivos para tener más reglas
     
     # Obtener reglas completas con referencias resueltas
     complete_rules = accumulator.get_complete_rules()
@@ -63,7 +63,7 @@ def load_real_kex_rules(input_dir: str):
     return formatted_rules
 
 
-def process_kex_rules_with_incremental_save(kex_rules, max_rules=None, model="llama3.2:latest", provider="ollama", output_dir="compiled_kex_rules"):
+def process_kex_rules_with_incremental_save(kex_rules, max_rules=None, model="llama3.2:latest", provider="ollama", output_dir="compiled_kex_rules", start_rule_index=1):
     """Procesa reglas KEX con guardado incremental."""
     rules_to_process = len(kex_rules) if max_rules is None else min(max_rules, len(kex_rules))
     print(f"\n🔄 Procesando {rules_to_process} reglas KEX {'(todas)' if max_rules is None else f'(límite: {max_rules})'}...")
@@ -153,7 +153,8 @@ def process_kex_rules_with_incremental_save(kex_rules, max_rules=None, model="ll
     manifest = compiler.compile_batch(
         executables, 
         save_incrementally=True, 
-        output_dir=str(output_path)
+        output_dir=str(output_path),
+        start_rule_index=start_rule_index
     )
     
     # Mostrar resultados
@@ -272,6 +273,13 @@ def parse_arguments():
         default="ollama",
         help="Proveedor LLM (ollama, openai, etc.)"
     )
+
+    parser.add_argument(
+        "--start-rule-index", "-i",
+        type=str,
+        default=1,
+        help="Rule index"
+    )
     
     return parser.parse_args()
 
@@ -306,7 +314,8 @@ def main():
         max_rules=args.max_rules,
         model=args.model,
         provider=args.provider,
-        output_dir=args.output
+        output_dir=args.output,
+        start_rule_index=args.start_rule_index
     )
     
     if not result:

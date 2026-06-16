@@ -220,10 +220,15 @@ class KEXDataAccumulator:
         if 'applicability' in resolved_rule and isinstance(resolved_rule['applicability'], dict):
             # Resolver scope y actors en applicability
             for field in ['scope', 'actors']:
-                if field in resolved_rule['applicability'] and isinstance(resolved_rule['applicability'][field], str):
-                    resolved_rule['applicability'][field] = self._resolve_text_references(
-                        resolved_rule['applicability'][field]
-                    )
+                if field in resolved_rule['applicability']:
+                    if isinstance(resolved_rule['applicability'][field], str):
+                        resolved_rule['applicability'][field] = self._resolve_text_references(
+                            resolved_rule['applicability'][field]
+                        )
+                    elif isinstance(resolved_rule['applicability'][field], list):
+                        resolved_rule['applicability'][field] = self.resolve_entity_references(
+                            resolved_rule['applicability'][field]
+                        )
         
         # Resolver explainability
         if 'explainability' in resolved_rule and isinstance(resolved_rule['explainability'], str):

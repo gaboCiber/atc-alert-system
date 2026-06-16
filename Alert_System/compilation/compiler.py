@@ -302,6 +302,7 @@ class RuleCompiler:
         executable_rules: List[Any],
         save_incrementally: bool = True,
         output_dir: Optional[str] = None,
+        start_rule_index = 1
     ) -> CompilationManifest:
         """
         Compila un lote de reglas ExecutableRule.
@@ -315,10 +316,10 @@ class RuleCompiler:
             CompilationManifest con resultados de todas las compilaciones
         """
         model_name = self.llm_config.name if self.llm_config else "unknown"
-        manifest = CompilationManifest(model_used=model_name)
         
         # Configurar loader para guardado incremental
         loader = None
+        manifest = None
         if save_incrementally:
             from .loader import CompiledRuleLoader
             if output_dir:
@@ -328,9 +329,17 @@ class RuleCompiler:
             
             # Asegurar que el directorio exista
             loader.compiled_rules_dir.mkdir(parents=True, exist_ok=True)
-        
-        for i, rule in enumerate(executable_rules):
-            print(f"\n🔨 Compiling rule {i+1}/{len(executable_rules)}: {rule.source_rule_id}")
+            manifest = loader.load_manifest()
+            
+        if not manifest:
+            manifest = CompilationManifest(model_used=model_name)
+
+        for i, rule in enumerate(executable_rules, 1):
+            if i < start_rule_index:
+                print(f"\n🔨 Skipping rule {i}")
+                continue
+
+            print(f"\n🔨 Compiling rule {i}/{len(executable_rules)}: {rule.source_rule_id}")
             
             compiled = self.compile_executable_rule(rule)
             manifest.add_rule(compiled)
@@ -341,17 +350,19 @@ class RuleCompiler:
                 print(f"  Reason: {compiled.failure_reason}")
             
             # Guardar inmediatamente si la compilación fue exitosa
-            if save_incrementally and loader and compiled.compilation_status == CompilationStatus.COMPILED:
+            if save_incrementally and loader:
                 try:
-                    # Guardar archivo .py individual
-                    loader.save_compiled_rule(compiled)
-                    print(f"  💾 Saved to {loader.compiled_rules_dir / f'{compiled.source_rule_id}.py'}")
+                    if compiled.compilation_status == CompilationStatus.COMPILED:
+                        # Guardar archivo .py individual
+                        loader.save_compiled_rule(compiled)
+                        print(f"  💾 Saved to {loader.compiled_rules_dir / f'{compiled.source_rule_id}.py'}")
                     
                     # Actualizar manifest incrementalmente
                     loader.save_manifest(manifest)
                     
                 except Exception as e:
                     print(f"  ⚠️ Error saving rule: {e}")
+            
         
         print(f"\n📊 Compilation summary:")
         print(f"  Compiled: {manifest.total_compiled}")
