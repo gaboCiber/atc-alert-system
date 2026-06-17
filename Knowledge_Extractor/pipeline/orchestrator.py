@@ -33,9 +33,9 @@ class ExtractionResult:
     context_entities: List[Dict[str, Any]]
     context_rules: List[Dict[str, Any]]
     context_relationships: List[Dict[str, Any]]
+    last_ids: Dict[str, Optional[str]]
     context_events: List[Dict[str, Any]] = None
     context_procedures: List[Dict[str, Any]] = None
-    last_ids: Dict[str, Optional[str]]
     error: Optional[str] = None
     post_processing_errors: List[Dict[str, Any]] = None
     post_process_message: str = ""
@@ -83,7 +83,15 @@ class KnowledgeExtractionPipeline:
             return
         
         # Find all pagina_*.json files
-        page_files = sorted(load_path.glob("pagina_*.json"))
+        import re
+        page_files_raw = list(load_path.glob("pagina_*.json"))
+        
+        # Sort by numeric page number (not lexicographic)
+        def _sort_key(path):
+            match = re.search(r"pagina_([\d.]+)\.json", path.name)
+            return float(match.group(1)) if match else 0.0
+        
+        page_files = sorted(page_files_raw, key=_sort_key)
         
         if not page_files:
             print(f"ℹ️ No previous page results found in {load_dir}")
@@ -92,12 +100,16 @@ class KnowledgeExtractionPipeline:
         print(f"📂 Loading previous state from {len(page_files)} pages...")
         
         loaded_entities = 0
+        loaded_rules = 0
+        loaded_relationships = 0
+        loaded_events = 0
+        loaded_procedures = 0
+        
         for page_file in page_files:
             try:
                 with open(page_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
-                import re
                 match = re.search(r"pagina_([\d.]+)\.json", page_file.name)
                 if not match:
                     continue
@@ -115,11 +127,20 @@ class KnowledgeExtractionPipeline:
                             entities = ner.get("entities", [])
                             rules = ner.get("rules", [])
                             relationships = ner.get("relationships", [])
+                            events = ner.get("events", [])
+                            procedures = ner.get("procedures", [])
                             
                             self.context_manager.add_entities(entities)
                             self.context_manager.add_rules(rules)
                             self.context_manager.add_relationships(relationships)
+                            self.context_manager.add_events(events)
+                            self.context_manager.add_procedures(procedures)
+                            
                             loaded_entities += len(entities)
+                            loaded_rules += len(rules)
+                            loaded_relationships += len(relationships)
+                            loaded_events += len(events)
+                            loaded_procedures += len(procedures)
                             
                             # Update ID manager
                             self.id_manager.update_from_extraction(ner)
@@ -129,13 +150,18 @@ class KnowledgeExtractionPipeline:
                     for category, last_id in data["last_ids_summary"].items():
                         if last_id:
                             self.id_manager.last_ids[category] = last_id
-                            
+                        
             except Exception as e:
                 print(f"⚠️ Error loading {page_file.name}: {e}")
         
         total_entities = self.context_manager.get_entity_count()
-        print(f"✅ Loaded {loaded_entities} entities from previous pages")
-        print(f"📊 Total accumulated entities: {total_entities}")
+        total_rules = self.context_manager.get_rule_count()
+        total_relationships = self.context_manager.get_relationship_count()
+        total_events = self.context_manager.get_event_count()
+        total_procedures = self.context_manager.get_procedure_count()
+        
+        print(f"✅ Loaded {loaded_entities}E, {loaded_rules}RULE, {loaded_relationships}R, {loaded_events}EV, {loaded_procedures}P from previous pages")
+        print(f"📊 Total accumulated: {total_entities}E, {total_rules}RULE, {total_relationships}R, {total_events}EV, {total_procedures}P")
         print(f"🔢 Last IDs: {self.id_manager.get_all_ids()}")
     
     def process(self, pdf_path: str, output_dir: Optional[str] = None) -> List[ExtractionResult]:
