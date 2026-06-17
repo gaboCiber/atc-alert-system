@@ -24,10 +24,14 @@ class EmbeddingConfig:
     # Context type limits (conservative defaults)
     rule_top_k: int = 5
     relationship_top_k: int = 10
+    event_top_k: int = 5
+    procedure_top_k: int = 5
     
     # Enable/disable flags
     include_rules: bool = True
     include_relationships: bool = True
+    include_events: bool = True
+    include_procedures: bool = True
 
 
 @dataclass

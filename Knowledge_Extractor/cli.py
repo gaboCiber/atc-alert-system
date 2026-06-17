@@ -145,6 +145,32 @@ def main():
         help="Maximum relationships to include in context (default: 10)"
     )
     
+    parser.add_argument(
+        "--event-limit",
+        type=int,
+        default=5,
+        help="Maximum events to include in context in sequential mode (default: 5)"
+    )
+    
+    parser.add_argument(
+        "--procedure-limit",
+        type=int,
+        default=5,
+        help="Maximum procedures to include in context in sequential mode (default: 5)"
+    )
+    
+    parser.add_argument(
+        "--no-events",
+        action="store_true",
+        help="Exclude events from context in sequential mode"
+    )
+    
+    parser.add_argument(
+        "--no-procedures",
+        action="store_true",
+        help="Exclude procedures from context in sequential mode"
+    )
+    
     # Validation control options
     parser.add_argument(
         "--no-strict-validation",
@@ -172,8 +198,12 @@ def main():
     embedding_config = EmbeddingConfig(
         rule_top_k=args.rule_limit,
         relationship_top_k=args.relationship_limit,
+        event_top_k=args.event_limit,
+        procedure_top_k=args.procedure_limit,
         include_rules=not args.no_rules,
         include_relationships=not args.no_relationships,
+        include_events=not args.no_events,
+        include_procedures=not args.no_procedures,
     )
     
     resume_config = ResumeConfig(

@@ -190,7 +190,9 @@ class ContextManager:
         text: str,
         include_entities: bool = True,
         include_rules: bool = True,
-        include_relationships: bool = True
+        include_relationships: bool = True,
+        include_events: bool = False,
+        include_procedures: bool = False
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
         Select relevant context items based on semantic similarity.
@@ -200,19 +202,25 @@ class ContextManager:
             include_entities: Whether to include entities.
             include_rules: Whether to include rules.
             include_relationships: Whether to include relationships.
+            include_events: Whether to include events.
+            include_procedures: Whether to include procedures.
             
         Returns:
             Dictionary with selected items by type:
             {
                 "entities": [...],
                 "rules": [...],
-                "relationships": [...]
+                "relationships": [...],
+                "events": [...],
+                "procedures": [...]
             }
         """
         result = {
             "entities": [],
             "rules": [],
-            "relationships": []
+            "relationships": [],
+            "events": [],
+            "procedures": [],
         }
         
         if include_entities:
@@ -228,6 +236,16 @@ class ContextManager:
         if include_relationships:
             result["relationships"] = self.relationship_store.select_relevant(
                 text, self.config.relationship_top_k, self.threshold, self.max_chars
+            )
+        
+        if include_events:
+            result["events"] = self.event_store.select_relevant(
+                text, self.config.event_top_k, self.threshold, self.max_chars
+            )
+        
+        if include_procedures:
+            result["procedures"] = self.procedure_store.select_relevant(
+                text, self.config.procedure_top_k, self.threshold, self.max_chars
             )
         
         return result

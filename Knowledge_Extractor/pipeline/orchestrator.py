@@ -33,6 +33,8 @@ class ExtractionResult:
     context_entities: List[Dict[str, Any]]
     context_rules: List[Dict[str, Any]]
     context_relationships: List[Dict[str, Any]]
+    context_events: List[Dict[str, Any]] = None
+    context_procedures: List[Dict[str, Any]] = None
     last_ids: Dict[str, Optional[str]]
     error: Optional[str] = None
     post_processing_errors: List[Dict[str, Any]] = None
@@ -556,55 +558,61 @@ class KnowledgeExtractionPipeline:
         context_entities: List[Dict[str, Any]] = []
         context_rules: List[Dict[str, Any]] = []
         context_relationships: List[Dict[str, Any]] = []
+        context_events: List[Dict[str, Any]] = []
+        context_procedures: List[Dict[str, Any]] = []
         last_ids: Dict[str, Any] = {}
         raw_output: str = ""
 
         try:
+            is_sequential = self.config.model.extraction_mode == "sequential"
+
             # Select all context types based on config
             selected_context = self.context_manager.select_context(
                 chunk_text,
                 include_entities=True,
                 include_rules=self.config.embedding.include_rules,
-                include_relationships=self.config.embedding.include_relationships
+                include_relationships=self.config.embedding.include_relationships,
+                include_events=is_sequential and self.config.embedding.include_events,
+                include_procedures=is_sequential and self.config.embedding.include_procedures,
             )
             
             context_entities = selected_context["entities"]
             context_rules = selected_context["rules"]
             context_relationships = selected_context["relationships"]
+            context_events = selected_context["events"]
+            context_procedures = selected_context["procedures"]
             
             # Get last IDs
             last_ids = self.id_manager.get_all_ids()
             
             # Log context info
-            total_context = len(context_entities) + len(context_rules) + len(context_relationships)
-            if total_context > 0:
-                parts = []
-                if context_entities:
-                    parts.append(f"{len(context_entities)}E")
-                if context_rules:
-                    parts.append(f"{len(context_rules)}RULE")
-                if context_relationships:
-                    parts.append(f"{len(context_relationships)}R")
+            parts = []
+            if context_entities:
+                parts.append(f"{len(context_entities)}E")
+            if context_rules:
+                parts.append(f"{len(context_rules)}RULE")
+            if context_relationships:
+                parts.append(f"{len(context_relationships)}R")
+            if is_sequential and context_events:
+                parts.append(f"{len(context_events)}EV")
+            if is_sequential and context_procedures:
+                parts.append(f"{len(context_procedures)}P")
+            if parts:
                 print(f"(context: {', '.join(parts)})", end=" ")
             
             # Extract with KEX based on extraction_mode
             step_errors: List[Dict[str, Any]] = []
-            if self.config.model.extraction_mode == "sequential":
-                # Sequential mode: extract types in order with accumulated context
-                accumulated = self._get_accumulated_context()
+            if is_sequential:
+                # Sequential mode: extract types in order with semantically filtered context
                 extraction, raw_output, step_errors = self.kex_extractor.extract_sequential(
                     text=chunk_text,
-                    accumulated_entities=accumulated["entities"],
-                    accumulated_relationships=accumulated["relationships"],
-                    accumulated_events=accumulated["events"],
-                    accumulated_rules=accumulated["rules"],
-                    accumulated_procedures=accumulated["procedures"],
+                    accumulated_entities=context_entities,
+                    accumulated_relationships=context_relationships,
+                    accumulated_events=context_events,
+                    accumulated_rules=context_rules,
+                    accumulated_procedures=context_procedures,
                     last_ids=last_ids,
                 )
-                # For sequential mode, use accumulated items as context
-                context_entities = accumulated["entities"]
-                context_rules = accumulated["rules"]
-                context_relationships = accumulated["relationships"]
             else:
                 # Joint mode (default): extract all at once
                 extraction, raw_output = self.kex_extractor.extract(
@@ -659,6 +667,8 @@ class KnowledgeExtractionPipeline:
                     context_entities=context_entities,
                     context_rules=context_rules,
                     context_relationships=context_relationships,
+                    context_events=context_events,
+                    context_procedures=context_procedures,
                     last_ids=last_ids,
                     error=error_msg,
                     post_processing_errors=all_errors,
@@ -722,6 +732,8 @@ class KnowledgeExtractionPipeline:
                 context_entities=context_entities,
                 context_rules=context_rules,
                 context_relationships=context_relationships,
+                context_events=context_events,
+                context_procedures=context_procedures,
                 last_ids=last_ids,
                 post_processing_errors=all_post_errors,
                 post_process_message=post_process_msg,
@@ -746,34 +758,14 @@ class KnowledgeExtractionPipeline:
                 context_entities=context_entities,
                 context_rules=context_rules,
                 context_relationships=context_relationships,
+                context_events=context_events,
+                context_procedures=context_procedures,
                 last_ids=last_ids,
                 error=error_msg,
                 post_processing_errors=[extraction_failure_error],
                 post_process_message="⚠️ Exception caught ",
             )
     
-    def _get_accumulated_context(self) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        Get all accumulated context from previous pages for sequential extraction.
-        
-        Returns:
-            Dictionary with all accumulated types:
-            {
-                "entities": [...],
-                "relationships": [...],
-                "events": [...],
-                "rules": [...],
-                "procedures": [...]
-            }
-        """
-        return {
-            "entities": self.context_manager.get_all_entities(),
-            "relationships": self.context_manager.get_all_relationships(),
-            "events": self.context_manager.get_all_events(),
-            "rules": self.context_manager.get_all_rules(),
-            "procedures": self.context_manager.get_all_procedures(),
-        }
-
     def cleanup(self):
         """
         Release Ollama models from memory.
