@@ -54,6 +54,13 @@ def main():
     )
     
     parser.add_argument(
+        "--timeout",
+        type=int,
+        default=120,
+        help="Timeout in seconds for LLM API calls (default: 120)"
+    )
+    
+    parser.add_argument(
         "--base-url",
         default="http://localhost:11434/v1",
         help="API base URL for OpenAI-compatible providers (Ollama, etc.)"
@@ -193,6 +200,7 @@ def main():
         api_key=args.api_key,
         extraction_mode=args.extraction_mode,
         max_retries=args.max_retries,
+        timeout=args.timeout,
     )
     
     embedding_config = EmbeddingConfig(

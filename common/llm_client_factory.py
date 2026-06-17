@@ -61,7 +61,7 @@ def create_instructor_client(config: ModelConfig) -> Tuple[Any, instructor.Mode]
             )
         
         client = instructor.from_anthropic(
-            Anthropic(api_key=config.api_key),
+            Anthropic(api_key=config.api_key, timeout=config.timeout),
             mode=instructor.Mode.ANTHROPIC_JSON,
         )
         return client, instructor.Mode.ANTHROPIC_JSON
@@ -70,6 +70,7 @@ def create_instructor_client(config: ModelConfig) -> Tuple[Any, instructor.Mode]
         openai_client = OpenAI(
             base_url=config.base_url or "https://openrouter.ai/api/v1",
             api_key=config.api_key,
+            timeout=config.timeout,
         )
         client = instructor.from_openai(
             openai_client,
@@ -86,6 +87,7 @@ def create_instructor_client(config: ModelConfig) -> Tuple[Any, instructor.Mode]
         openai_client = OpenAI(
             base_url=base_url,
             api_key=config.api_key,
+            timeout=config.timeout,
         )
         client = instructor.from_openai(
             openai_client,
@@ -119,6 +121,7 @@ def create_raw_client(config: ModelConfig) -> Optional[OpenAI]:
         return OpenAI(
             base_url=config.base_url or "https://openrouter.ai/api/v1",
             api_key=config.api_key,
+            timeout=config.timeout,
         )
     
     else:  # openai or ollama
@@ -130,4 +133,5 @@ def create_raw_client(config: ModelConfig) -> Optional[OpenAI]:
         return OpenAI(
             base_url=base_url,
             api_key=config.api_key,
+            timeout=config.timeout,
         )
