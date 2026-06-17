@@ -220,6 +220,7 @@ def test_compiled_rules(output_dir):
                     parameters={},
                     traffic_state=traffic_state,
                     aircraft_callsign=callsign,
+                    instruction=None,
                 )
                 
                 status = "✅" if result.satisfied else "❌"

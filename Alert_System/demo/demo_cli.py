@@ -547,7 +547,8 @@ class DemoCLI:
                     result = evaluator.evaluate(
                         traffic_state=state,
                         parameters={},
-                        aircraft_callsign=callsign
+                        aircraft_callsign=callsign,
+                        instruction=None,
                     )
                     if not result.satisfied and result.violation:
                         violations_found.append({

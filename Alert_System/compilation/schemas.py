@@ -103,6 +103,24 @@ class ValidatedCodeResponse(BaseModel):
     )
     
     @validator('code')
+    def normalize_code(cls, v):
+        """Normalizar escapes que algunos LLMs generan en vez de newlines reales.
+
+        Algunos modelos (ej. nemotron) serializan el código con \\n literal
+        en lugar de saltos de línea reales en la respuesta JSON. Esto causa
+        SyntaxError en validate_syntax porque \\n no es válido en Python.
+        """
+        # Reemplazar \\n literal (backslash+n) con newlines reales
+        v = v.replace("\\n", "\n")
+        # Reemplazar \\\" con " (double quotes escapados)
+        v = v.replace('\\"', '"')
+        # Reemplazar \\' con ' (single quotes escapados)
+        v = v.replace("\\'", "'")
+        # Reemplazar \\\\ con \ (backslash escapado)
+        v = v.replace("\\\\", "\\")
+        return v
+    
+    @validator('code')
     def validate_syntax(cls, v):
         """Validar sintaxis del código."""
         try:
@@ -121,21 +139,29 @@ class ValidatedCodeResponse(BaseModel):
     
     @validator('code')
     def validate_function_signature(cls, v):
-        """Validar signature de la función evaluate."""
+        """Validar signature de la función evaluate.
+        
+        Signatures aceptadas:
+        - evaluate(traffic_state)
+        - evaluate(traffic_state, callsign=None)
+        - evaluate(traffic_state, callsign=None, instruction=None)
+        """
         import ast
         try:
             tree = ast.parse(v)
+            found = False
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef) and node.name == 'evaluate':
-                    args = node.args.args
-                    if not args or args[0].arg != 'traffic_state':
+                    found = True
+                    args = [a.arg for a in node.args.args]
+                    if not args or args[0] != 'traffic_state':
                         raise ValueError("La función evaluate debe tener 'traffic_state' como primer parámetro")
                     break
-            else:
+            if not found:
                 raise ValueError("No se encontró la función evaluate")
         except Exception as e:
-            if "must have" in str(e):
-                raise  # Re-lanzar el error de validación
+            if any(msg in str(e) for msg in ["must have", "No se encontró", "debe tener"]):
+                raise
         return v
     
     @validator('code')

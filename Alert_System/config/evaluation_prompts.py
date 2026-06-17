@@ -54,6 +54,8 @@ Raw Text: {raw_rule_text}
 - Active runways: {runway_status}
 - Separation concerns: {separation_summary}
 
+{instruction_context}
+
 Evaluate this rule and return your assessment as structured JSON.
 Focus on whether the rule is violated given the current state.
 """
@@ -68,10 +70,15 @@ def build_evaluation_prompt(
     msa_value: str,
     runway_status: str,
     separation_summary: str,
+    instruction_summary: str = "",
 ) -> tuple[str, str]:
     """Build system and user prompts for LLM evaluation."""
     
     system_prompt = LLM_EVALUATION_SYSTEM_PROMPT
+    
+    instruction_context = ""
+    if instruction_summary:
+        instruction_context = f"**INSTRUCTION DATA (ATC Communication):**\n{instruction_summary}\n"
     
     user_prompt = LLM_EVALUATION_USER_PROMPT_TEMPLATE.format(
         rule_id=rule_id,
@@ -83,6 +90,7 @@ def build_evaluation_prompt(
         msa_value=msa_value,
         runway_status=runway_status,
         separation_summary=separation_summary,
+        instruction_context=instruction_context,
     )
     
     return system_prompt, user_prompt

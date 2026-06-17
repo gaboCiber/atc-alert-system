@@ -735,6 +735,7 @@ class AlertPipeline:
                     projected,
                     parameters={},
                     aircraft_callsign=callsign,
+                    instruction=parsed,
                 )
                 if not result.satisfied and result.violation:
                     violations.append(result.violation)
@@ -780,6 +781,7 @@ class AlertPipeline:
                         projected,
                         parameters={},
                         aircraft_callsign=callsign,
+                        instruction=parsed,
                     )
                     if not result.satisfied and result.violation:
                         violations.append(result.violation)

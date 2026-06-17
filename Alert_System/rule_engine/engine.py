@@ -57,6 +57,7 @@ class RuleEngine:
         parameters: Dict[str, Any],
         traffic_state: TrafficState,
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> ConditionResult:
         """
         Evalúa una condición específica.
@@ -66,6 +67,7 @@ class RuleEngine:
             parameters: Parámetros de la condición
             traffic_state: Estado del tráfico (actual o proyectado)
             aircraft_callsign: Callsign de la aeronave objetivo
+            instruction: ParsedInstruction opcional con datos de comunicación ATC
             
         Returns:
             ConditionResult con el resultado de la evaluación
@@ -89,13 +91,14 @@ class RuleEngine:
             )
         
         # Evaluar la condición
-        return evaluator.evaluate(traffic_state, parameters, aircraft_callsign)
+        return evaluator.evaluate(traffic_state, parameters, aircraft_callsign, instruction=instruction)
     
     def batch_evaluate(
         self,
         conditions: List[Dict[str, Any]],
         traffic_state: TrafficState,
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> List[ConditionResult]:
         """
         Evalúa múltiples condiciones.
@@ -104,6 +107,7 @@ class RuleEngine:
             conditions: Lista de condiciones, cada una con 'type' y 'parameters'
             traffic_state: Estado del tráfico
             aircraft_callsign: Callsign de la aeronave objetivo
+            instruction: ParsedInstruction opcional con datos de comunicación ATC
             
         Returns:
             Lista de ConditionResult
@@ -114,7 +118,7 @@ class RuleEngine:
             cond_type = condition.get("type")
             parameters = condition.get("parameters", {})
             
-            result = self.evaluate(cond_type, parameters, traffic_state, aircraft_callsign)
+            result = self.evaluate(cond_type, parameters, traffic_state, aircraft_callsign, instruction=instruction)
             results.append(result)
         
         return results

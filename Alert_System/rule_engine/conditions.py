@@ -50,6 +50,7 @@ class ConditionEvaluator(ABC):
         traffic_state: TrafficState,
         parameters: Dict[str, Any],
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> ConditionResult:
         """
         Evalúa la condición contra el estado del tráfico.
@@ -58,6 +59,7 @@ class ConditionEvaluator(ABC):
             traffic_state: Estado actual o proyectado del tráfico
             parameters: Parámetros de la condición desde la regla
             aircraft_callsign: Callsign de la aeronave objetivo (si aplica)
+            instruction: ParsedInstruction opcional con datos de comunicación ATC
             
         Returns:
             ConditionResult con el resultado de la evaluación
@@ -69,6 +71,7 @@ class ConditionEvaluator(ABC):
         self,
         traffic_state: TrafficState,
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> List[Violation]:
         """
         Evalúa TODAS las reglas registradas contra el estado.
@@ -76,6 +79,7 @@ class ConditionEvaluator(ABC):
         Args:
             traffic_state: Estado actual o proyectado del tráfico
             aircraft_callsign: Callsign de la aeronave objetivo (si aplica)
+            instruction: ParsedInstruction opcional con datos de comunicación ATC
             
         Returns:
             Lista de violaciones encontradas
@@ -129,6 +133,7 @@ class AltitudeCondition(ConditionEvaluator):
         traffic_state: TrafficState,
         parameters: Dict[str, Any],
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> ConditionResult:
         """Evalúa condición de altitud."""
         if not aircraft_callsign:
@@ -229,6 +234,7 @@ class AltitudeCondition(ConditionEvaluator):
         self,
         traffic_state: TrafficState,
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> List[Violation]:
         """
         Evalúa TODAS las reglas de altitud registradas.
@@ -249,7 +255,7 @@ class AltitudeCondition(ConditionEvaluator):
         
         for rule in rules_to_evaluate:
             parameters = rule.get("parameters", {})
-            result = self.evaluate(traffic_state, parameters, aircraft_callsign)
+            result = self.evaluate(traffic_state, parameters, aircraft_callsign, instruction=instruction)
             if not result.satisfied and result.violation:
                 violations.append(result.violation)
         
@@ -279,6 +285,7 @@ class SeparationCondition(ConditionEvaluator):
         traffic_state: TrafficState,
         parameters: Dict[str, Any],
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> ConditionResult:
         """Evalúa condición de separación."""
         if not aircraft_callsign:
@@ -413,6 +420,7 @@ class SeparationCondition(ConditionEvaluator):
         self,
         traffic_state: TrafficState,
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> List[Violation]:
         """
         Evalúa TODAS las reglas de separación registradas.
@@ -440,7 +448,7 @@ class SeparationCondition(ConditionEvaluator):
         
         for rule in rules_to_evaluate:
             parameters = rule.get("parameters", {})
-            result = self.evaluate(traffic_state, parameters, aircraft_callsign)
+            result = self.evaluate(traffic_state, parameters, aircraft_callsign, instruction=instruction)
             if not result.satisfied and result.violation:
                 violations.append(result.violation)
         
@@ -467,6 +475,7 @@ class RunwayCondition(ConditionEvaluator):
         traffic_state: TrafficState,
         parameters: Dict[str, Any],
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> ConditionResult:
         """Evalúa condición de pista."""
         check_type = parameters.get("check_type")
@@ -548,6 +557,7 @@ class RunwayCondition(ConditionEvaluator):
         self,
         traffic_state: TrafficState,
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> List[Violation]:
         """
         Evalúa TODAS las reglas de pista registradas.
@@ -561,7 +571,7 @@ class RunwayCondition(ConditionEvaluator):
         if self._rules:
             for rule in self._rules:
                 parameters = rule.get("parameters", {})
-                result = self.evaluate(traffic_state, parameters, aircraft_callsign)
+                result = self.evaluate(traffic_state, parameters, aircraft_callsign, instruction=instruction)
                 if not result.satisfied and result.violation:
                     violations.append(result.violation)
         else:
@@ -636,6 +646,7 @@ class GenericKexCondition(ConditionEvaluator):
         traffic_state: Any,  # TrafficState or ProjectedState
         parameters: Dict[str, Any],
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> ConditionResult:
         """
         Evalúa una regla genérica contra el estado del tráfico.
@@ -646,6 +657,7 @@ class GenericKexCondition(ConditionEvaluator):
             traffic_state: Estado actual del tráfico (TrafficState o ProjectedState)
             parameters: Parámetros de la regla (incluyendo executable_rule)
             aircraft_callsign: Callsign de la aeronave a evaluar
+            instruction: ParsedInstruction opcional con datos de comunicación ATC
             
         Returns:
             ConditionResult indicando si se cumple la condición
@@ -665,19 +677,20 @@ class GenericKexCondition(ConditionEvaluator):
             self._initialize_clients()
             if self._instructor_client:
                 try:
-                    return self._evaluate_with_llm(executable, traffic_state, aircraft_callsign)
+                    return self._evaluate_with_llm(executable, traffic_state, aircraft_callsign, instruction=instruction)
                 except Exception as e:
                     # Log error and fallback to keywords
                     print(f"Warning: LLM evaluation failed: {e}, falling back to keywords")
         
         # Fallback: evaluación por keywords
-        return self._evaluate_with_keywords(executable, traffic_state, aircraft_callsign)
+        return self._evaluate_with_keywords(executable, traffic_state, aircraft_callsign, instruction=instruction)
     
     def _evaluate_with_llm(
         self,
         executable: Any,  # ExecutableRule from integration.schemas
         traffic_state: Any,  # TrafficState or ProjectedState
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> ConditionResult:
         """Evaluate rule using LLM with structured output."""
         # Lazy imports to avoid circular dependency
@@ -695,6 +708,17 @@ class GenericKexCondition(ConditionEvaluator):
         # Build traffic state summary
         traffic_summary = self._build_traffic_state_summary(actual_state, aircraft_callsign)
         
+        # Build instruction summary if available
+        instruction_summary = ""
+        if instruction is not None:
+            instruction_summary = (
+                f"Type: {instruction.instruction_type.value if hasattr(instruction.instruction_type, 'value') else instruction.instruction_type}, "
+                f"Speaker: {instruction.speaker.value if hasattr(instruction.speaker, 'value') else instruction.speaker}, "
+                f"Raw: {instruction.raw_text}, "
+                f"Action: {instruction.action_verb}, "
+                f"Params: {instruction.parameters}"
+            )
+        
         # Build prompts
         system_prompt, user_prompt = build_evaluation_prompt(
             rule_id=executable.source_rule_id,
@@ -706,6 +730,7 @@ class GenericKexCondition(ConditionEvaluator):
             msa_value=str(actual_state.msa or "N/A"),
             runway_status=traffic_summary["runways"],
             separation_summary=traffic_summary["separations"],
+            instruction_summary=instruction_summary,
         )
         
         # Call LLM with structured output
@@ -764,6 +789,7 @@ class GenericKexCondition(ConditionEvaluator):
         executable: Any,  # ExecutableRule from integration.schemas
         traffic_state: Any,  # TrafficState or ProjectedState
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> ConditionResult:
         """Fallback evaluation using keyword matching."""
         condition_desc = executable.condition_description or ""
@@ -858,6 +884,7 @@ class GenericKexCondition(ConditionEvaluator):
         self,
         traffic_state: TrafficState,
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> List[Violation]:
         """
         Evalúa todas las reglas genéricas registradas.
@@ -871,7 +898,8 @@ class GenericKexCondition(ConditionEvaluator):
             result = self.evaluate(
                 traffic_state=traffic_state,
                 parameters={},
-                aircraft_callsign=aircraft_callsign
+                aircraft_callsign=aircraft_callsign,
+                instruction=instruction,
             )
             if not result.satisfied and result.violation:
                 violations.append(result.violation)
@@ -879,7 +907,7 @@ class GenericKexCondition(ConditionEvaluator):
         # También evaluar reglas registradas vía add_rule
         for rule in self._rules:
             parameters = rule.get("parameters", {})
-            result = self.evaluate(traffic_state, parameters, aircraft_callsign)
+            result = self.evaluate(traffic_state, parameters, aircraft_callsign, instruction=instruction)
             if not result.satisfied and result.violation:
                 violations.append(result.violation)
         
@@ -924,6 +952,9 @@ class CompiledCondition(ConditionEvaluator):
                 TrafficState, AircraftState, Position, FlightPhase,
                 RunwayState, RunwayOperationMode, WakeTurbulenceCategory, Clearances,
             )
+            from ..models.instruction import (
+                ParsedInstruction, InstructionType, Speaker,
+            )
             CompiledCondition._SAFE_NAMESPACE_BASE = {
                 "math": math,
                 "TrafficState": TrafficState,
@@ -934,6 +965,9 @@ class CompiledCondition(ConditionEvaluator):
                 "RunwayOperationMode": RunwayOperationMode,
                 "WakeTurbulenceCategory": WakeTurbulenceCategory,
                 "Clearances": Clearances,
+                "ParsedInstruction": ParsedInstruction,
+                "InstructionType": InstructionType,
+                "Speaker": Speaker,
                 "__builtins__": {
                     "True": True, "False": False, "None": None,
                     "int": int, "float": float, "str": str, "bool": bool,
@@ -1013,6 +1047,7 @@ class CompiledCondition(ConditionEvaluator):
         traffic_state: Any,
         parameters: Dict[str, Any],
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> ConditionResult:
         """
         Evalúa la condición compilada contra el estado del tráfico.
@@ -1026,7 +1061,7 @@ class CompiledCondition(ConditionEvaluator):
             # Intentar fallback
             fallback = self._get_fallback_condition()
             if fallback:
-                return fallback.evaluate(traffic_state, parameters, aircraft_callsign)
+                return fallback.evaluate(traffic_state, parameters, aircraft_callsign, instruction=instruction)
             
             return ConditionResult(
                 satisfied=False,
@@ -1043,8 +1078,8 @@ class CompiledCondition(ConditionEvaluator):
             if hasattr(traffic_state, 'traffic_state'):
                 actual_state = traffic_state.traffic_state
             
-            # Ejecutar la función compilada
-            result_dict = evaluate_fn(actual_state, callsign=aircraft_callsign)
+            # Ejecutar la función compilada con instruction opcional
+            result_dict = evaluate_fn(actual_state, callsign=aircraft_callsign, instruction=instruction)
             
             # Convertir dict resultado a ConditionResult
             return self._dict_to_condition_result(result_dict, aircraft_callsign)
@@ -1055,7 +1090,7 @@ class CompiledCondition(ConditionEvaluator):
             
             fallback = self._get_fallback_condition()
             if fallback:
-                return fallback.evaluate(traffic_state, parameters, aircraft_callsign)
+                return fallback.evaluate(traffic_state, parameters, aircraft_callsign, instruction=instruction)
             
             return ConditionResult(
                 satisfied=False,
@@ -1128,6 +1163,7 @@ class CompiledCondition(ConditionEvaluator):
         self,
         traffic_state: TrafficState,
         aircraft_callsign: Optional[str] = None,
+        instruction: Optional[Any] = None,
     ) -> List[Violation]:
         """
         Evalúa la condición compilada para todas las aeronaves.
@@ -1135,7 +1171,7 @@ class CompiledCondition(ConditionEvaluator):
         violations = []
         
         if aircraft_callsign:
-            result = self.evaluate(traffic_state, {}, aircraft_callsign)
+            result = self.evaluate(traffic_state, {}, aircraft_callsign, instruction=instruction)
             if not result.satisfied and result.violation:
                 violations.append(result.violation)
         else:
@@ -1145,7 +1181,7 @@ class CompiledCondition(ConditionEvaluator):
                 actual_state = traffic_state.traffic_state
             
             for callsign in actual_state.aircrafts:
-                result = self.evaluate(traffic_state, {}, callsign)
+                result = self.evaluate(traffic_state, {}, callsign, instruction=instruction)
                 if not result.satisfied and result.violation:
                     violations.append(result.violation)
         

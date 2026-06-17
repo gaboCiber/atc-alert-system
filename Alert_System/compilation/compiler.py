@@ -14,6 +14,7 @@ from .prompts import (
     COMPILATION_SYSTEM_PROMPT,
     COMPILATION_USER_PROMPT_TEMPLATE,
     TRAFFIC_STATE_SCHEMA,
+    PARSED_INSTRUCTION_SCHEMA,
     CLASSIFICATION_SYSTEM_PROMPT,
     CLASSIFICATION_USER_PROMPT_TEMPLATE,
 )
@@ -396,6 +397,8 @@ class RuleCompiler:
         if not self._instructor_client:
             raise RuntimeError("No LLM client available for compilation")
         
+        combined_schema = TRAFFIC_STATE_SCHEMA + "\n" + PARSED_INSTRUCTION_SCHEMA
+        
         user_prompt = COMPILATION_USER_PROMPT_TEMPLATE.format(
             rule_id=rule_id,
             category=category,
@@ -404,7 +407,7 @@ class RuleCompiler:
             constraint=constraint,
             severity=severity,
             safety_critical=safety_critical,
-            traffic_state_schema=TRAFFIC_STATE_SCHEMA,
+            traffic_state_schema=combined_schema,
         )
         
         # Usar Instructor con response_model validado
@@ -432,7 +435,10 @@ class RuleCompiler:
             Tuple de (success, error_message)
         """
         from Alert_System.models.traffic_state import (
-            TrafficState, AircraftState, Position, FlightPhase
+            TrafficState, AircraftState, Position, FlightPhase,
+        )
+        from Alert_System.models.instruction import (
+            ParsedInstruction, InstructionType, Speaker,
         )
         
         # Crear TrafficState de prueba
@@ -459,6 +465,26 @@ class RuleCompiler:
             },
         )
         
+        # Crear ParsedInstruction de prueba con datos comunes
+        test_instruction = ParsedInstruction(
+            raw_text="TEST123 descend to FL240 on heading 090 speed 250",
+            normalized_text="test123 descend to fl240 on heading 090 speed 250",
+            speaker=Speaker.ATCO,
+            callsign="TEST123",
+            instruction_type=InstructionType.DESCENT,
+            action_verb="descend",
+            parameters={
+                "target_altitude": 24000,
+                "flight_level": 240,
+                "heading": 90,
+                "speed": 250,
+                "runway": "09L",
+                "frequency": "118.5",
+                "waypoint": "KORLI",
+            },
+            temporal_marker="immediately",
+        )
+        
         # Namespace restringido para ejecución
         import math
         namespace = {
@@ -467,6 +493,9 @@ class RuleCompiler:
             "AircraftState": AircraftState,
             "Position": Position,
             "FlightPhase": FlightPhase,
+            "ParsedInstruction": ParsedInstruction,
+            "InstructionType": InstructionType,
+            "Speaker": Speaker,
         }
         
         try:
@@ -479,8 +508,8 @@ class RuleCompiler:
             
             evaluate_fn = namespace["evaluate"]
             
-            # Ejecutar con callsign específico
-            result = evaluate_fn(test_state, callsign="TEST123")
+            # Ejecutar con callsign específico y la instrucción de prueba
+            result = evaluate_fn(test_state, callsign="TEST123", instruction=test_instruction)
             
             # Verificar estructura del resultado
             if not isinstance(result, dict):
@@ -504,8 +533,8 @@ class RuleCompiler:
             if result["severity"] not in {"INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"}:
                 return False, f"Invalid severity: {result['severity']}"
             
-            # Ejecutar sin callsign (para todos los aircraft)
-            result_all = evaluate_fn(test_state, callsign=None)
+            # Ejecutar sin callsign (para todos los aircraft) con instrucción
+            result_all = evaluate_fn(test_state, callsign=None, instruction=test_instruction)
             if not isinstance(result_all, dict):
                 return False, f"evaluate(callsign=None) returned {type(result_all).__name__}, expected dict"
             

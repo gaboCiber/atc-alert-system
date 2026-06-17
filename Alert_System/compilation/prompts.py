@@ -89,6 +89,90 @@ class TrafficState(BaseModel):
     # calculate_distance(pos1, pos2) -> float  # distancia en NM
 """
 
+PARSED_INSTRUCTION_SCHEMA = """
+# INSTRUCTION PARAMETER (available as optional 3rd parameter of evaluate())
+# The instruction parameter contains the parsed ATC communication that triggered this evaluation.
+# Use it for phraseology checks, read-back verification, and instruction type matching.
+
+class InstructionType(str, Enum):
+    UNKNOWN = "unknown"
+    # Vertical movement
+    DESCENT = "descent"
+    CLIMB = "climb"
+    MAINTAIN_ALTITUDE = "maintain_altitude"
+    EXPEDITE_DESCENT = "expedite_descent"
+    EXPEDITE_CLIMB = "expedite_climb"
+    # Heading
+    HEADING = "heading"
+    TURN_LEFT = "turn_left"
+    TURN_RIGHT = "turn_right"
+    PRESENT_HEADING = "present_heading"
+    # Speed
+    SPEED = "speed"
+    MAINTAIN_SPEED = "maintain_speed"
+    REDUCE_SPEED = "reduce_speed"
+    INCREASE_SPEED = "increase_speed"
+    NO_SPEED_RESTRICTION = "no_speed_restriction"
+    # Clearances
+    TAKEOFF_CLEARANCE = "takeoff_clearance"
+    LANDING_CLEARANCE = "landing_clearance"
+    APPROACH_CLEARANCE = "approach_clearance"
+    # Ground movement
+    TAXI = "taxi"
+    TAXI_VIA = "taxi_via"
+    HOLD_POSITION = "hold_position"
+    HOLD_SHORT = "hold_short"
+    LINE_UP = "line_up"
+    LINE_UP_AND_WAIT = "line_up_and_wait"
+    # Communications
+    CONTACT = "contact"
+    MONITOR = "monitor"
+    SQUAWK = "squawk"
+    IDENT = "ident"
+    CHECK_STROBE = "check_strobe"
+    # Emergency
+    PAN_PAN = "pan_pan"
+    MAYDAY = "mayday"
+    EMERGENCY_DESCENT = "emergency_descent"
+    # Other
+    REPORT = "report"
+    CLEARED_AS_FILED = "cleared_as_filed"
+    DIRECT_TO = "direct_to"
+    CLEARED_TO_LAND = "cleared_to_land"
+    GO_AROUND = "go_around"
+    MISSED_APPROACH = "missed_approach"
+
+class Speaker(str, Enum):
+    ATCO = "atco"
+    PILOT = "pilot"
+
+class ParsedInstruction:
+    raw_text: str              # Raw ATC text: "AAL123 descend to FL240"
+    normalized_text: str       # Normalized version
+    speaker: Speaker           # Who spoke: ATCO or PILOT
+    callsign: str|None         # Target aircraft callsign: "AAL123"
+    instruction_type: InstructionType  # DESCENT, HEADING, TAKEOFF_CLEARANCE, etc.
+    action_verb: str           # Main action: "descend", "turn", "hold", "contact"
+    parameters: dict           # Extracted values:
+                               #   target_altitude: int (ft), heading: int (deg),
+                               #   speed: int (kts), runway: str,
+                               #   waypoint: str, flight_level: int,
+                               #   frequency: str (e.g. "118.5")
+    temporal_marker: str|None  # "immediately", "when_ready", "at_pilot_discretion"
+    priority_marker: str|None  # "urgent", "priority", "expedite"
+    entities: list[str]        # KEX entity IDs referenced
+    is_valid: bool             # Whether the instruction was parsed correctly
+
+    # Useful methods:
+    # get_target_altitude() -> int|None
+    # get_target_heading() -> int|None
+    # get_target_speed() -> int|None
+    # is_clearance() -> bool  (takeoff/landing/approach clearance?)
+    # is_altitude_change() -> bool
+    # requires_immediate_action() -> bool
+    # has_parameter(key) -> bool
+"""
+
 COMPILATION_SYSTEM_PROMPT = """You are an expert ATC (Air Traffic Control) rule compiler. Your task is to convert natural language ATC rules into Python evaluation functions.
 
 You must respond with a structured JSON object containing:
@@ -99,14 +183,14 @@ You must respond with a structured JSON object containing:
 CRITICAL VALIDATION REQUIREMENTS:
 Your code will be automatically validated before acceptance. Ensure:
 1. VALID SYNTAX: Code must parse without syntax errors
-2. CORRECT FUNCTION: Must contain `def evaluate(traffic_state, callsign=None):`
+2. CORRECT FUNCTION: Must contain `def evaluate(traffic_state, callsign=None, instruction=None):`
 3. NO FORBIDDEN IMPORTS: Only allowed imports are `math` and `datetime`
 4. NO FORBIDDEN OPERATIONS: Cannot use os, subprocess, open, exec, eval, etc.
 5. CORRECT RETURN STRUCTURE: Must return dict with keys: "satisfied", "details", "explanation", "severity"
 
 CODE GENERATION RULES:
 1. Generate ONLY the `evaluate` function — no imports, no classes, no code outside function.
-2. The function signature MUST be exactly: `def evaluate(traffic_state, callsign=None):`
+2. The function signature MUST be exactly: `def evaluate(traffic_state, callsign=None, instruction=None):`
 3. The function MUST return a dict with these exact keys:
    - "satisfied" (bool): True if rule is satisfied (no violation), False if violated
    - "details" (dict): Relevant values extracted from traffic_state
@@ -134,13 +218,58 @@ CODE GENERATION RULES:
     - Example WRONG: `if aircraft.callsign == "Big Jet 345":` (without .upper())
 14. Keep the function concise but correct. Prioritize correctness over brevity.
 15. The function MUST contain `def evaluate(` exactly as specified.
+16. **USING INSTRUCTION PARAMETER (3rd parameter)**:
+    - `instruction` is an optional `ParsedInstruction` with the ATC communication data
+    - If `instruction` is None, evaluate using `traffic_state` only
+    - `instruction.raw_text`: Full raw text of the ATC communication
+    - `instruction.instruction_type`: Type of instruction (DESCENT, HEADING, TAKEOFF_CLEARANCE, CONTACT, etc.)
+    - `instruction.action_verb`: Main action verb ("descend", "turn", "hold", "contact")
+    - `instruction.speaker`: Who spoke (ATCO or PILOT)
+    - `instruction.parameters`: Dict with extracted values:
+      - `target_altitude`: int (ft), `heading`: int (deg), `speed`: int (kts)
+      - `runway`: str, `frequency`: str, `waypoint`: str
+    - `instruction.temporal_marker`: "immediately", "when_ready", or None
+    - `instruction.is_clearance()`: True if takeoff/landing/approach clearance
+    - `instruction.is_altitude_change()`: True if instruction changes altitude
+    - Use for: phraseology checks, read-back verification, instruction type matching,
+      clearance content validation, frequency assignment checks
+17. **SAFE PARAMETER ACCESS**: When accessing `instruction.parameters`, ALWAYS use
+    `.get("key", default)` instead of `["key"]` to avoid KeyError:
+    - CORRECT: `instruction.parameters.get("target_altitude", 0)`
+    - CORRECT: `instruction.parameters.get("heading", None)`
+    - WRONG: `instruction.parameters["target_altitude"]` (will crash if key missing)
+    - WRONG: `instruction.parameters.get("target_altitude")` without default (returns None,
+      which is fine if you check for None, but prefer an explicit default)
+18. **SAFE INSTRUCTION ACCESS**: Always handle `instruction is None`:
+    ```python
+    if instruction is None:
+        return {"satisfied": True, "details": {}, "explanation": "No instruction data", "severity": "INFO"}
+    ```
+    Or use safe patterns like:
+    ```python
+    params = instruction.parameters if instruction else {}
+    heading = params.get("heading", None)
+    ```
+19. **PHRASEOLOGY PATTERNS** (when using instruction):
+    - "cleared for take-off" → `instruction.instruction_type == TAKEOFF_CLEARANCE`
+    - "hold position" → `instruction.instruction_type == HOLD_POSITION`
+    - "contact [frequency]" → `instruction_type == CONTACT` and `params.get("frequency")`
+    - Heading ending in 0 → `params.get("heading")` should be followed by "degrees"
+    - First contact → Check if instruction contains callsign + position/altitude in raw_text
+20. **READ-BACK CHECKS** (when using instruction):
+    - For pilot read-backs: `instruction.speaker == PILOT`
+    - Check if instruction text matches standard read-back patterns
+    - Altitude read-back: instruction should repeat the assigned altitude
+    - Heading read-back: instruction should repeat the assigned heading
+    - Squawk read-back: instruction should repeat the squawk code
 
 SELF-VALIDATION CHECKLIST before responding:
 □ No syntax errors
-□ Function signature is correct
+□ Function signature is correct (traffic_state, callsign=None, instruction=None)
 □ No forbidden imports
 □ No forbidden operations
 □ Return structure includes all required keys
+□ Code handles instruction=None safely
 □ Code is safe and follows all rules
 
 If validation fails, your response will be automatically rejected and you'll need to retry.
@@ -160,11 +289,30 @@ COMPILATION_USER_PROMPT_TEMPLATE = """## ATC Rule to Compile
 
 {traffic_state_schema}
 
+## Instruction Parameter (Optional 3rd Parameter)
+
+The `instruction` parameter is available for rules that need communication data:
+
+```python
+instruction.raw_text: str              # "AAL123 descend to FL240"
+instruction.instruction_type: str      # DESCENT, HEADING, TAKEOFF_CLEARANCE, etc.
+instruction.action_verb: str           # "descend", "turn", "hold", "contact"
+instruction.speaker: str              # "atco" or "pilot"
+instruction.parameters: dict           # {{"target_altitude": 24000, "heading": 90}}
+instruction.callsign: str|None         # "AAL123"
+instruction.temporal_marker: str|None  # "immediately"
+instruction.is_clearance() -> bool
+instruction.is_altitude_change() -> bool
+```
+
+When the rule checks communication content, phraseology, or read-backs, use `instruction`.
+When `instruction is None`, evaluate using `traffic_state` only and return satisfied=True.
+
 ## Examples
 
 ### Example 1: MSA Altitude Check
 ```python
-def evaluate(traffic_state, callsign=None):
+def evaluate(traffic_state, callsign=None, instruction=None):
     aircraft = traffic_state.get_aircraft(callsign) if callsign else None
     if callsign and not aircraft:
         return {{"satisfied": True, "details": {{"error": "aircraft not found"}}, "explanation": "Aircraft not found in state", "severity": "INFO"}}
@@ -189,7 +337,7 @@ def evaluate(traffic_state, callsign=None):
 
 ### Example 2: Separation Check
 ```python
-def evaluate(traffic_state, callsign=None):
+def evaluate(traffic_state, callsign=None, instruction=None):
     import math
     if not callsign:
         return {{"satisfied": True, "details": {{}}, "explanation": "Requires specific callsign", "severity": "INFO"}}
@@ -212,6 +360,30 @@ def evaluate(traffic_state, callsign=None):
             }}
     
     return {{"satisfied": True, "details": {{"callsign": callsign, "nearby_count": len(nearby)}}, "explanation": "Adequate separation maintained", "severity": "INFO"}}
+```
+
+### Example 3: Read-back Check (using instruction parameter with safe access)
+```python
+def evaluate(traffic_state, callsign=None, instruction=None):
+    if instruction is None:
+        return {{"satisfied": True, "details": {{}}, "explanation": "No instruction data available", "severity": "INFO"}}
+    
+    params = instruction.parameters if instruction else {{}}
+    target = params.get("target_altitude", 0)
+    hdg = params.get("heading", None)
+    spd = params.get("speed", None)
+    
+    # Check that pilot read back the altitude instruction
+    if instruction.instruction_type == "descent" and instruction.speaker == "pilot":
+        if target > 0 and str(target) not in instruction.raw_text:
+            return {{
+                "satisfied": False,
+                "details": {{"instruction": instruction.raw_text, "expected_altitude": target}},
+                "explanation": f"Pilot did not read back altitude {{target}}ft in: {{instruction.raw_text}}",
+                "severity": "MEDIUM"
+            }}
+    
+    return {{"satisfied": True, "details": {{"check": "readback_ok"}}, "explanation": "Instruction read-back satisfactory", "severity": "INFO"}}
 ```
 
 Now compile the following rule into a Python evaluate function:
@@ -328,13 +500,23 @@ class RunwayState:
 - Speed/heading deviations from clearances
 - Aircraft on wrong runway
 
+**COMPILABLE WITH INSTRUCTION PARAMETER (is_compilable=True)**: Rules that check communication content
+CAN be compiled using the optional `instruction` parameter. The `instruction` parameter provides
+access to the parsed ATC communication data. Examples:
+- Phraseology rules: check instruction.raw_text, instruction.action_verb
+- Read-back rules: check instruction.speaker, instruction.instruction_type
+- Clearance content rules: check instruction.instruction_type, instruction.parameters
+- Frequency assignment: check instruction.parameters.get("frequency")
+- First contact rules: check instruction.raw_text for callsign + position
+NOTE: These would NOT be compilable without the instruction parameter, but WITH it they ARE.
+
 **NOT COMPILABLE (is_compilable=False)**: The rule requires:
-- Subjective judgment (e.g., "use standard phraseology", "be concise")
-- Communication content analysis (e.g., what words were spoken)
+- Subjective judgment (e.g., "be concise", "use professional tone", "sound confident")
 - Human intent interpretation (e.g., "pilot should understand")
-- External data not in TrafficState (e.g., NOTAMs, weather beyond wind/QNH)
-- Procedural compliance that cannot be measured from state alone
-- Rules about what SHOULD happen vs what IS happening (normative vs descriptive)
+- External data not in TrafficState or ParsedInstruction (e.g., TCAS Resolution Advisories, NOTAMs, RVSM approval status, specific geographical holding points, weather beyond wind/QNH)
+- Voice tone analysis (e.g., "tone of voice was urgent")
+- Real-time coordination status with other sectors
+- Procedural compliance that cannot be measured from state or instruction alone
 
 You must respond with a structured JSON object containing exactly these fields:
 - "is_compilable": bool (True if rule can be evaluated with TrafficState data)
@@ -357,5 +539,10 @@ CLASSIFICATION_USER_PROMPT_TEMPLATE = """## Rule to Classify
 **Severity**: {severity}
 **Explainability**: {explainability}
 
-Is this rule compilable into a Python function that evaluates TrafficState?
+IMPORTANT: An optional `instruction` parameter (ParsedInstruction) is available at evaluation time.
+This parameter contains the parsed ATC communication (raw_text, instruction_type, action_verb,
+parameters, speaker). Rules about communication content, phraseology, read-backs, and
+type-specific validations CAN be compiled if they can be checked using instruction data.
+
+Is this rule compilable into a Python function that evaluates TrafficState (and optionally instruction)?
 """
