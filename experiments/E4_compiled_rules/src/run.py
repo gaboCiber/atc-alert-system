@@ -35,6 +35,8 @@ Examples:
     parser.add_argument("--judge-base-url", type=str, default="http://localhost:11434/v1")
     parser.add_argument("--judge-api-key", type=str, default="ollama")
     parser.add_argument("--judge-max-retries", type=int, default=3)
+    parser.add_argument("--no-judge-cache", action="store_true", help="Skip judge cache, re-evaluate all rules")
+    parser.add_argument("--judge-cache-dir", type=str, default=None, help="Directory for judge cache files (default: results/)")
 
     args = parser.parse_args()
 
@@ -43,7 +45,11 @@ Examples:
         ground_truth_dir=args.gt_dir,
         models_dir=args.models_dir,
         output_dir=args.output,
+        judge_cache_dir=args.judge_cache_dir,
     )
+
+    if args.no_judge_cache:
+        cfg.judge_cache_dir = None
 
     cfg.figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -72,6 +78,7 @@ Examples:
     if judge_cfg.enabled:
         print(f"    Model:         {judge_cfg.model_name}")
         print(f"    Provider:     {judge_cfg.provider}")
+        print(f"    Cache:         {'disabled' if cfg.judge_cache_dir is None else cfg.judge_cache_dir}")
     print()
 
     print("Loading experiment data...")
@@ -90,7 +97,7 @@ Examples:
     print(f"  Test states:       {len(data.test_traffic_states)} states")
     print()
 
-    judge = SemanticJudge(judge_cfg)
+    judge = SemanticJudge(judge_cfg, cache_dir=cfg.judge_cache_dir)
 
     print("Running evaluation...")
     results = run_evaluation(data, judge, metric_cfg)

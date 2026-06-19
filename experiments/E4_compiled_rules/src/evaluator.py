@@ -126,7 +126,7 @@ def run_evaluation(
                 gt_code = data.reference_code.get(rule_id, "")
                 gen_code = compiled_code[rule_id]
                 if gt_code and gen_code:
-                    result = judge.judge(rule_id, gt_code, gen_code)
+                    result = judge.judge(rule_id, gt_code, gen_code, model_name=model_name)
                     if result:
                         sm.scores[rule_id] = result.similarity_score
 

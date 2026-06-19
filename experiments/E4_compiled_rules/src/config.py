@@ -11,12 +11,15 @@ class E4Config:
     models_dir: Path = field(init=False)
     results_dir: Path = field(init=False)
     figures_dir: Path = field(init=False)
+    judge_cache_dir: Optional[Path] = None
 
     def __post_init__(self):
         self.ground_truth_dir = self.base_dir / "ground_truth"
         self.models_dir = self.base_dir / "models"
         self.results_dir = self.base_dir / "results"
         self.figures_dir = self.results_dir / "figures"
+        if self.judge_cache_dir is None:
+            self.judge_cache_dir = self.results_dir
 
     @classmethod
     def from_dirs(
@@ -25,6 +28,7 @@ class E4Config:
         ground_truth_dir: Optional[str] = None,
         models_dir: Optional[str] = None,
         output_dir: Optional[str] = None,
+        judge_cache_dir: Optional[str] = None,
     ):
         base = Path(base_dir) if base_dir else Path(__file__).parent.parent
         cfg = cls(base_dir=base)
@@ -35,6 +39,8 @@ class E4Config:
         if output_dir:
             cfg.results_dir = Path(output_dir)
             cfg.figures_dir = cfg.results_dir / "figures"
+        if judge_cache_dir:
+            cfg.judge_cache_dir = Path(judge_cache_dir)
         return cfg
 
 

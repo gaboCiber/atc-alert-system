@@ -197,6 +197,62 @@ def plot_execution_match_rate(
     return fig
 
 
+def plot_comparison_table(
+    results: EvaluationResults,
+    cfg: E4Config,
+) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(max(10, len(results.model_names) * 2), 4))
+    ax.axis("off")
+
+    columns = ["Overall", "Classification", "Validation", "Execution", "Semantic"]
+
+    rows = []
+    for model in results.model_names:
+        sm = results.summaries[model]
+        rows.append([
+            _short_name(model),
+            f"{sm.overall_score:.1%}",
+            f"{sm.classification_metrics.accuracy:.1%}" if sm.classification_metrics else "N/A",
+            f"{sm.validation_pass_rate:.1%}",
+            f"{sm.execution_metrics.match_rate:.1%}" if sm.execution_metrics else "N/A",
+            f"{sm.semantic_metrics.mean_score:.1%}" if sm.semantic_metrics else "N/A",
+        ])
+
+    col_headers = ["Model"] + columns
+    table = ax.table(cellText=rows, colLabels=col_headers, loc="center", cellLoc="center")
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1.2, 1.5)
+
+    best_values = {}
+    for col_idx in range(1, len(col_headers)):
+        vals = []
+        for r in rows:
+            v = r[col_idx]
+            if v != "N/A":
+                vals.append(float(v.rstrip('%')) / 100)
+        if vals:
+            best_values[col_idx] = max(vals)
+
+    for (i, j), cell in table.get_celld().items():
+        if i == 0:
+            cell.set_facecolor("#2c3e50")
+            cell.set_text_props(color="white", fontweight="bold")
+        else:
+            cell.set_facecolor("#ecf0f1" if i % 2 == 0 else "#ffffff")
+            if j in best_values:
+                cell_text = cell.get_text().get_text()
+                if cell_text != "N/A":
+                    cell_val = float(cell_text.rstrip('%')) / 100
+                    if abs(cell_val - best_values[j]) < 1e-6:
+                        cell.set_text_props(fontweight="bold")
+
+    ax.set_title("Model Comparison Summary", fontsize=13, fontweight="bold", pad=20)
+
+    plt.tight_layout()
+    return fig
+
+
 def generate_report(
     results: EvaluationResults,
     cfg: E4Config,
@@ -215,6 +271,7 @@ def generate_report(
         "validation_breakdown": plot_validation_breakdown(results, cfg),
         "radar_comparison": plot_radar_comparison(results, cfg),
         "execution_match_rate": plot_execution_match_rate(results, cfg),
+        "comparison_table": plot_comparison_table(results, cfg),
     }
 
     if save_figures:
