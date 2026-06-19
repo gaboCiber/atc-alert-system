@@ -78,16 +78,24 @@ def load_experiment_data(cfg: E3Config) -> tuple[
     Dict[str, Dict[str, str]],
     Dict[str, str],
 ]:
-    gt_files = list(cfg.ground_truth_dir.glob("*"))
-    if not gt_files:
-        raise FileNotFoundError(f"No ground truth files found in {cfg.ground_truth_dir}")
+    # Load ground truth
+    if cfg.ground_truth_file and cfg.ground_truth_file.exists():
+        gt_path = cfg.ground_truth_file
+    else:
+        gt_files = list(cfg.ground_truth_dir.glob("*"))
+        if not gt_files:
+            raise FileNotFoundError(f"No ground truth files found in {cfg.ground_truth_dir}")
+        gt_path = gt_files[0]
 
-    gt_path = gt_files[0]
     ground_truth = load_ground_truth_csv(gt_path)
 
-    csv_files = discover_transcription_files(cfg.transcriptions_dir)
-    if not csv_files:
-        raise FileNotFoundError(f"No transcription CSV files found in {cfg.transcriptions_dir}")
+    # Load transcriptions
+    if cfg.transcriptions_file and cfg.transcriptions_file.exists():
+        csv_files = [cfg.transcriptions_file]
+    else:
+        csv_files = discover_transcription_files(cfg.transcriptions_dir)
+        if not csv_files:
+            raise FileNotFoundError(f"No transcription CSV files found in {cfg.transcriptions_dir}")
 
     all_transcriptions: Dict[str, Dict[str, str]] = {}
     for csv_file in csv_files:

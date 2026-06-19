@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -184,16 +184,27 @@ def plot_model_comparison_table(
             f"{sm.average_mer:.2%}" if sm.average_mer > 0 else "N/A",
             f"{sm.average_wil:.2%}" if sm.average_wil > 0 else "N/A",
             f"{sm.average_wip:.2%}" if sm.average_wip > 0 else "N/A",
-            str(sm.total_substitutions),
-            str(sm.total_insertions),
-            str(sm.total_deletions),
         ])
 
-    columns = ["Model", "WER", "MER", "WIL", "WIP", "Subs", "Ins", "Dels"]
+    columns = ["Model", "WER", "MER", "WIL", "WIP"]
     table = ax.table(cellText=rows, colLabels=columns, loc="center", cellLoc="center")
     table.auto_set_font_size(False)
     table.set_fontsize(9)
     table.scale(1.2, 1.5)
+
+    best_values = {}
+    for col_idx in range(1, len(columns)):
+        vals = []
+        for r in rows:
+            v = r[col_idx]
+            if v != "N/A":
+                vals.append(float(v.rstrip('%')) / 100)
+        if not vals:
+            continue
+        if col_idx in [1, 2, 3]:
+            best_values[col_idx] = min(vals)
+        else:
+            best_values[col_idx] = max(vals)
 
     for (i, j), cell in table.get_celld().items():
         if i == 0:
@@ -201,6 +212,12 @@ def plot_model_comparison_table(
             cell.set_text_props(color="white", fontweight="bold")
         else:
             cell.set_facecolor("#ecf0f1" if i % 2 == 0 else "#ffffff")
+            if j in best_values:
+                cell_text = cell.get_text().get_text()
+                if cell_text != "N/A":
+                    cell_val = float(cell_text.rstrip('%')) / 100
+                    if abs(cell_val - best_values[j]) < 1e-6:
+                        cell.set_text_props(fontweight="bold")
 
     ax.set_title("Model Comparison Summary", fontsize=13, fontweight="bold", pad=20)
 
@@ -213,6 +230,7 @@ def generate_report(
     cfg: E3Config,
     output_dir: Optional[Path] = None,
     save_figures: bool = True,
+    dataset_suffix: str = "",
 ) -> dict:
     if output_dir is None:
         output_dir = cfg.results_dir
@@ -231,7 +249,7 @@ def generate_report(
 
     if save_figures:
         for name, fig in figures.items():
-            fig.savefig(cfg.figures_dir / f"{name}.png", bbox_inches="tight", dpi=150)
+            fig.savefig(cfg.figures_dir / f"{name}{dataset_suffix}.png", bbox_inches="tight", dpi=150)
             plt.close(fig)
 
     results_path = output_dir / "results.json"
@@ -262,8 +280,172 @@ def generate_report(
     report = {
         "results": str(results_path),
         "summary": str(summary_path),
-        "figures": {name: str(cfg.figures_dir / f"{name}.png") for name in figures},
+        "figures": {name: str(cfg.figures_dir / f"{name}{dataset_suffix}.png") for name in figures},
         "ranking": summary_data["ranking"],
     }
 
     return report
+
+
+def plot_multi_metric_by_dataset(
+    all_results: Dict[str, EvaluationResults],
+) -> plt.Figure:
+    dataset_names = list(all_results.keys())
+    n_datasets = len(dataset_names)
+
+    fig, axes = plt.subplots(1, n_datasets, figsize=(12 * n_datasets, 6), sharey=True)
+    if n_datasets == 1:
+        axes = [axes]
+
+    palette = {"WER": "#e74c3c", "MER": "#f39c12", "WIL": "#3498db"}
+
+    for ax, dataset_name in zip(axes, dataset_names):
+        results = all_results[dataset_name]
+        models = results.model_names
+        x = np.arange(len(models))
+        width = 0.25
+
+        wers = [results.summaries[m].average_wer for m in models]
+        mers = [results.summaries[m].average_mer for m in models]
+        wils = [results.summaries[m].average_wil for m in models]
+
+        ax.bar(x - width, wers, width, label="WER", color=palette["WER"], edgecolor="black", linewidth=0.5)
+        ax.bar(x, mers, width, label="MER", color=palette["MER"], edgecolor="black", linewidth=0.5)
+        ax.bar(x + width, wils, width, label="WIL", color=palette["WIL"], edgecolor="black", linewidth=0.5)
+
+        ax.set_xlabel("Model", fontsize=11)
+        ax.set_title(f"Dataset: {dataset_name}", fontsize=13, fontweight="bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels([m for m in models], rotation=45, ha="right", fontsize=9)
+        ax.grid(axis="y", alpha=0.3)
+        ax.legend(fontsize=9, loc="upper left")
+
+    axes[0].set_ylabel("Metric Value (lower is better)", fontsize=11)
+    fig.suptitle("Multi-Metric Performance by Dataset", fontsize=15, fontweight="bold", y=1.02)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_cross_dataset_scatter(
+    all_results: Dict[str, EvaluationResults],
+) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    dataset_names = list(all_results.keys())
+    markers = {"atco2": "o", "jacktol_test": "s", "default": "D"}
+    linestyles = {"atco2": "-", "jacktol_test": "--", "default": "-."}
+
+    all_model_names = []
+    for results in all_results.values():
+        for m in results.model_names:
+            if m not in all_model_names:
+                all_model_names.append(m)
+
+    n_models = len(all_model_names)
+    colors = plt.cm.tab10(np.linspace(0, 0.9, n_models))
+    model_color_map = {m: colors[i] for i, m in enumerate(all_model_names)}
+
+    for dataset_name in dataset_names:
+        results = all_results[dataset_name]
+        marker = markers.get(dataset_name, markers["default"])
+        ls = linestyles.get(dataset_name, linestyles["default"])
+
+        for model in results.model_names:
+            sm = results.summaries[model]
+            ax.scatter(
+                sm.average_wer, sm.average_wip,
+                marker=marker, color=model_color_map[model],
+                s=120, edgecolors="black", linewidth=0.5, zorder=3,
+            )
+
+    ax.plot([0, 1], [1, 0], "k--", alpha=0.3, linewidth=1, label="WER + WIP = 1")
+
+    for dataset_name in dataset_names:
+        marker = markers.get(dataset_name, markers["default"])
+        ax.scatter([], [], marker=marker, c="gray", s=80, edgecolors="black",
+                   linewidth=0.5, label=f"Dataset: {dataset_name}")
+
+    for model in all_model_names:
+        ax.scatter([], [], color=model_color_map[model], s=80, edgecolors="black",
+                   linewidth=0.5, label=model)
+
+    ax.set_xlabel("Word Error Rate (WER)", fontsize=12)
+    ax.set_ylabel("Word Information Preserved (WIP)", fontsize=12)
+    ax.set_title("Cross-Dataset Scatter: Information Preservation vs Error Rate", fontsize=14, fontweight="bold")
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_ylim(-0.02, 1.02)
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.02, 0.5), ncol=1)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_cumulative_wer_cdf(
+    all_results: Dict[str, EvaluationResults],
+) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    dataset_names = list(all_results.keys())
+    linestyles = {"atco2": "-", "jacktol_test": "--", "default": "-."}
+
+    all_model_names = []
+    for results in all_results.values():
+        for m in results.model_names:
+            if m not in all_model_names:
+                all_model_names.append(m)
+
+    n_models = len(all_model_names)
+    colors = plt.cm.tab10(np.linspace(0, 0.9, n_models))
+    model_color_map = {m: colors[i] for i, m in enumerate(all_model_names)}
+
+    for dataset_name in dataset_names:
+        results = all_results[dataset_name]
+        ls = linestyles.get(dataset_name, linestyles["default"])
+
+        for model in results.model_names:
+            sm = results.summaries[model]
+            sorted_wer = np.sort(sm.per_sample_wer)
+            cdf = np.arange(1, len(sorted_wer) + 1) / len(sorted_wer)
+            ax.plot(
+                sorted_wer, cdf,
+                linestyle=ls, color=model_color_map[model],
+                linewidth=1.5, alpha=0.85,
+                label=f"{model} ({dataset_name})",
+            )
+
+    ax.set_xlabel("WER Threshold", fontsize=12)
+    ax.set_ylabel("Proportion of Samples with WER ≤ Threshold", fontsize=12)
+    ax.set_title("Cumulative Distribution of WER by Model and Dataset", fontsize=14, fontweight="bold")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1.02)
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=7, loc="lower right", ncol=2, bbox_to_anchor=(1.25, 0))
+
+    plt.tight_layout()
+    return fig
+
+
+def generate_combined_figures(
+    all_results: Dict[str, EvaluationResults],
+    output_dir: Path,
+    save_figures: bool = True,
+) -> dict:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    figures = {
+        "multi_metric_by_dataset": plot_multi_metric_by_dataset(all_results),
+        "cross_dataset_scatter": plot_cross_dataset_scatter(all_results),
+        "cumulative_wer_cdf": plot_cumulative_wer_cdf(all_results),
+    }
+
+    saved = {}
+    if save_figures:
+        for name, fig in figures.items():
+            path = output_dir / f"{name}.png"
+            fig.savefig(path, bbox_inches="tight", dpi=150)
+            plt.close(fig)
+            saved[name] = str(path)
+
+    return {"figures": saved}
