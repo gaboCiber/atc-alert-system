@@ -83,7 +83,7 @@ def compute_structural_metrics(
     pcount = len(pred_chunks)
     gcount = len(gt_chunks)
     ccount_error = abs(pcount - gcount)
-    ccount_acc = 1.0 - ccount_error / max(gcount, 1)
+    ccount_acc = 1.0 - min(1.0, ccount_error / max(gcount, 1))
 
     if not gt_chunks:
         return StructuralMetrics(

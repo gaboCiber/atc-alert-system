@@ -28,7 +28,7 @@ plt.rcParams["font.family"] = "sans-serif"
 
 
 def _short_name(name: str) -> str:
-    return name.split("(")[0].strip().replace(" ", "_")[:20]
+    return name.split("(")[0].strip().replace(" ", "_")
 
 
 def plot_chunk_count_distribution(
@@ -307,6 +307,98 @@ def plot_boundary_integrity_comparison(
     return fig
 
 
+def plot_ranking_table(
+    results: EvaluationResults,
+    cfg: E1Config,
+) -> plt.Figure:
+    sorted_models = sorted(
+        results.model_names, key=lambda m: results.summaries[m].overall_score, reverse=True
+    )
+
+    headers = ["Rank", "Model", "Overall", "BoundaryF1", "ContentF1", "ChunkAcc", "BoundaryInt", "E_count", "E_bound_avg"]
+
+    higher_is_better = {1: True, 2: True, 3: True, 4: True, 5: True, 6: True, 7: False, 8: False}
+
+    rows = []
+    for rank, model in enumerate(sorted_models, 1):
+        sm = results.summaries[model]
+        rows.append([
+            rank,
+            _short_name(model),
+            f"{sm.overall_score:.3f}",
+            f"{sm.boundary_f1_mean:.3f}",
+            f"{sm.matched_content_f1_mean:.3f}",
+            f"{sm.chunk_count_accuracy_mean:.3f}",
+            f"{sm.boundary_integrity_mean:.3f}",
+            f"{sm.chunk_count_error_mean:.2f}",
+            f"{sm.boundary_avg_error_mean:.2f}",
+        ])
+
+    numeric_cols = list(range(2, len(headers)))
+
+    best_vals = {}
+    for col_idx in numeric_cols:
+        vals = [float(row[col_idx]) for row in rows]
+        if higher_is_better[col_idx]:
+            best_vals[col_idx] = max(vals)
+        else:
+            best_vals[col_idx] = min(vals)
+
+    n_rows = len(rows)
+    row_height = 0.45
+    fig_height = n_rows * row_height + 1.5
+    fig, ax = plt.subplots(figsize=(11, fig_height))
+    ax.axis("off")
+
+    table = ax.table(
+        cellText=rows,
+        colLabels=headers,
+        loc="center",
+        cellLoc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1, 1.6)
+
+    col_widths = [0.05, 0.17, 0.08, 0.09, 0.08, 0.08, 0.10, 0.08, 0.09]
+    for (row, col), cell in table.get_celld().items():
+        if col < len(col_widths):
+            cell.set_width(col_widths[col])
+
+    for j in range(len(headers)):
+        cell = table[0, j]
+        cell.set_facecolor("#2c3e50")
+        cell.set_text_props(color="white", fontweight="bold")
+
+    for i in range(n_rows):
+        for j in range(len(headers)):
+            cell = table[i + 1, j]
+            if i % 2 == 0:
+                cell.set_facecolor("#f8f9fa")
+            else:
+                cell.set_facecolor("#ffffff")
+            if j == 1:
+                cell.set_text_props(ha="left")
+            if j in numeric_cols:
+                val = float(rows[i][j])
+                if val == best_vals[j]:
+                    cell.set_facecolor("#d4edda")
+                    cell.set_text_props(fontweight="bold")
+
+    for i in range(n_rows + 1):
+        table[i, 0].set_text_props(ha="center")
+
+    ax.set_title(
+        "Model Ranking by Overall Score",
+        fontsize=13, fontweight="bold", pad=10, y=0.88
+    )
+
+    fig.subplots_adjust(top=0.7)
+
+    plt.tight_layout()
+    return fig
+
+
 def generate_report(
     results: EvaluationResults,
     cfg: E1Config,
@@ -329,6 +421,7 @@ def generate_report(
         "boundary_avg_error": plot_boundary_avg_error_per_page(results, cfg),
         "page_by_page": plot_page_by_page_comparison(results, cfg),
         "boundary_integrity_comparison": plot_boundary_integrity_comparison(results, cfg),
+        "ranking_table": plot_ranking_table(results, cfg),
     }
 
     if save_figures:
@@ -354,6 +447,8 @@ def generate_report(
                 "boundary_f1_mean": results.summaries[results.model_names[idx]].boundary_f1_mean,
                 "matched_content_f1_mean": results.summaries[results.model_names[idx]].matched_content_f1_mean,
                 "chunk_count_accuracy_mean": results.summaries[results.model_names[idx]].chunk_count_accuracy_mean,
+                "chunk_count_error_mean": results.summaries[results.model_names[idx]].chunk_count_error_mean,
+                "boundary_avg_error_mean": results.summaries[results.model_names[idx]].boundary_avg_error_mean,
                 "boundary_integrity_mean": results.summaries[results.model_names[idx]].boundary_integrity_mean,
             }
             for pos, idx in enumerate(sorted_indices)

@@ -22,6 +22,8 @@ class ModelSummaryMetrics:
 
     chunk_count_accuracy_mean: float = 0.0
     chunk_count_accuracy_std: float = 0.0
+    chunk_count_error_mean: float = 0.0
+    chunk_count_error_std: float = 0.0
     boundary_f1_mean: float = 0.0
     boundary_f1_std: float = 0.0
     boundary_precision_mean: float = 0.0
@@ -51,6 +53,10 @@ def _compute_summary(
     cca = [pm.structural.chunk_count_accuracy for pm in page_metrics_list]
     s.chunk_count_accuracy_mean = np.mean(cca)
     s.chunk_count_accuracy_std = np.std(cca)
+
+    cce = [pm.structural.chunk_count_error for pm in page_metrics_list]
+    s.chunk_count_error_mean = np.mean(cce)
+    s.chunk_count_error_std = np.std(cce)
 
     bf1 = [pm.structural.boundary_f1 for pm in page_metrics_list]
     s.boundary_f1_mean = np.mean(bf1)
@@ -130,6 +136,8 @@ class EvaluationResults:
                 "structural": {
                     "chunk_count_accuracy_mean": sm.chunk_count_accuracy_mean,
                     "chunk_count_accuracy_std": sm.chunk_count_accuracy_std,
+                    "chunk_count_error_mean": sm.chunk_count_error_mean,
+                    "chunk_count_error_std": sm.chunk_count_error_std,
                     "boundary_f1_mean": sm.boundary_f1_mean,
                     "boundary_f1_std": sm.boundary_f1_std,
                     "boundary_precision_mean": sm.boundary_precision_mean,

@@ -132,7 +132,7 @@ Examples:
     print("MODEL RANKING (by overall score):")
     for entry in report.get("ranking", []):
         print(f"  #{entry['rank']}: {entry['model']}")
-        print(f"       Score={entry['overall_score']:.3f}  BoundaryF1={entry['boundary_f1_mean']:.3f}  ContentF1={entry['matched_content_f1_mean']:.3f}  ChunkAcc={entry['chunk_count_accuracy_mean']:.3f}  BoundaryInt={entry['boundary_integrity_mean']:.3f}")
+        print(f"       Score={entry['overall_score']:.3f}  BoundaryF1={entry['boundary_f1_mean']:.3f}  ContentF1={entry['matched_content_f1_mean']:.3f}  ChunkAcc={entry['chunk_count_accuracy_mean']:.3f}  BoundaryInt={entry['boundary_integrity_mean']:.3f}  E_count={entry['chunk_count_error_mean']:.2f}  E_bound_avg={entry['boundary_avg_error_mean']:.2f}")
 
     print()
     print("Done.")
