@@ -20,7 +20,7 @@ class E6Config:
         self.results_dir = self.base_dir / "results"
         self.figures_dir = self.results_dir / "figures"
         e4_base = self.base_dir.parent / "E4_compiled_rules"
-        self.compiled_rules_dir = e4_base / "models" / "model_A(gemma4:e4b)"
+        self.compiled_rules_dir = e4_base / "models" / "gpt-oss:120b-cloud"
 
     @classmethod
     def from_dirs(

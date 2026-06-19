@@ -1,4 +1,5 @@
 import importlib.util
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -186,6 +187,118 @@ class SystemBenchmark:
                 print(f"  WARNING: could not create BERT parser: {e}")
             self.bert_parser = None
 
+    def _parse_instruction(self, raw_instruction: str):
+        """Parse raw instruction string into a ParsedInstruction object."""
+        if not raw_instruction:
+            return None
+        try:
+            from Alert_System.models.instruction import (
+                ParsedInstruction, InstructionType, Speaker,
+            )
+            text = raw_instruction.lower()
+            callsign_match = re.search(r'\b([a-z]{3}\d+)\b', text)
+            callsign = callsign_match.group(1).upper() if callsign_match else None
+
+            instruction_type = InstructionType.UNKNOWN
+            action_verb = "unknown"
+            parameters = {}
+
+            if "descend" in text or "descent" in text:
+                instruction_type = InstructionType.DESCENT
+                action_verb = "descend"
+                fl_match = re.search(r'fl\s*(\d+)', text)
+                if fl_match:
+                    parameters["target_altitude"] = int(fl_match.group(1)) * 100
+                    parameters["flight_level"] = int(fl_match.group(1))
+                alt_match = re.search(r'(?:to|at)\s+(\d{4,6})\s*(?:feet|ft)?', text)
+                if alt_match and "target_altitude" not in parameters:
+                    parameters["target_altitude"] = int(alt_match.group(1))
+            elif "climb" in text:
+                instruction_type = InstructionType.CLIMB
+                action_verb = "climb"
+                fl_match = re.search(r'fl\s*(\d+)', text)
+                if fl_match:
+                    parameters["target_altitude"] = int(fl_match.group(1)) * 100
+                alt_match = re.search(r'(?:to|at)\s+(\d{4,6})\s*(?:feet|ft)?', text)
+                if alt_match and "target_altitude" not in parameters:
+                    parameters["target_altitude"] = int(alt_match.group(1))
+            elif "maintain" in text:
+                instruction_type = InstructionType.MAINTAIN_ALTITUDE
+                action_verb = "maintain"
+                fl_match = re.search(r'fl\s*(\d+)', text)
+                if fl_match:
+                    parameters["target_altitude"] = int(fl_match.group(1)) * 100
+                alt_match = re.search(r'maintain\s+(?:at\s+)?(?:fl\s*)?(\d{4,6})\s*(?:feet|ft)?', text)
+                if alt_match and "target_altitude" not in parameters:
+                    val = int(alt_match.group(1))
+                    parameters["target_altitude"] = val * 100 if val < 1000 else val
+            elif "heading" in text or "turn" in text:
+                instruction_type = InstructionType.HEADING
+                action_verb = "turn" if "turn" in text else "heading"
+                heading_match = re.search(r'(?:heading|turn\s+(?:left|right)?)\s+(\d{3})', text)
+                if heading_match:
+                    parameters["heading"] = int(heading_match.group(1))
+            elif "speed" in text:
+                instruction_type = InstructionType.SPEED
+                action_verb = "speed"
+                spd_match = re.search(r'speed\s+(?:to\s+)?(\d{3})', text)
+                if spd_match:
+                    parameters["speed"] = int(spd_match.group(1))
+            elif "cleared for takeoff" in text:
+                instruction_type = InstructionType.TAKEOFF_CLEARANCE
+                action_verb = "takeoff"
+                rw_match = re.search(r'runway\s+(\d+[lr]?)', text)
+                if rw_match:
+                    parameters["runway"] = rw_match.group(1)
+            elif "cleared to land" in text:
+                instruction_type = InstructionType.LANDING_CLEARANCE
+                action_verb = "land"
+                rw_match = re.search(r'runway\s+(\d+[lr]?)', text)
+                if rw_match:
+                    parameters["runway"] = rw_match.group(1)
+            elif "taxi" in text:
+                instruction_type = InstructionType.TAXI
+                action_verb = "taxi"
+                wp_match = re.search(r'(?:to|via)\s+([\w\s]+)', text)
+                if wp_match:
+                    parameters["waypoint"] = wp_match.group(1).strip()
+                rw_match = re.search(r'runway\s+(\d+[lr]?)', text)
+                if rw_match:
+                    parameters["runway"] = rw_match.group(1)
+            elif "hold short" in text or "hold position" in text:
+                instruction_type = InstructionType.HOLD_SHORT
+                action_verb = "hold"
+                rw_match = re.search(r'runway\s+(\d+[lr]?)', text)
+                if rw_match:
+                    parameters["runway"] = rw_match.group(1)
+            elif "contact" in text:
+                instruction_type = InstructionType.CONTACT
+                action_verb = "contact"
+            elif "squawk" in text:
+                instruction_type = InstructionType.SQUAWK
+                action_verb = "squawk"
+                sq_match = re.search(r'squawk\s+(\d{4})', text)
+                if sq_match:
+                    parameters["squawk"] = sq_match.group(1)
+            elif "line up" in text:
+                instruction_type = InstructionType.LINE_UP
+                action_verb = "line_up"
+                rw_match = re.search(r'runway\s+(\d+[lr]?)', text)
+                if rw_match:
+                    parameters["runway"] = rw_match.group(1)
+
+            return ParsedInstruction(
+                raw_text=raw_instruction,
+                normalized_text=raw_instruction,
+                speaker=Speaker.ATCO,
+                callsign=callsign,
+                instruction_type=instruction_type,
+                action_verb=action_verb,
+                parameters=parameters,
+            )
+        except Exception:
+            return None
+
     # ── BERT Parse Timing ──
 
     def benchmark_bert(self, instruction: str) -> float:
@@ -222,14 +335,15 @@ class SystemBenchmark:
     # ── Compiled Rule Timing ──
 
     def benchmark_compiled(
-        self, ts_data: dict, callsign: Optional[str]
+        self, ts_data: dict, callsign: Optional[str], instruction=None
     ) -> Dict[str, float]:
         timings = {}
         ts = build_traffic_state(ts_data)
+        parsed = self._parse_instruction(instruction) if isinstance(instruction, str) else instruction
         for rule_id, fn in self.compiled_rules.items():
             start = time.perf_counter()
             try:
-                fn(ts, callsign=callsign)
+                fn(ts, callsign=callsign, instruction=parsed)
             except Exception:
                 pass
             elapsed = (time.perf_counter() - start) * 1000

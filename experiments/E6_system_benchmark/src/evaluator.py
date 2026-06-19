@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from config import E6Config, LLMConfig
 from test_case_loader import TestCase, load_test_cases
+import benchmark_runner
 from benchmark_runner import SystemBenchmark, TcBenchmark, EvalResult
 from metrics import aggregate_latency, aggregate_accuracy, LatencyStats, AccuracyMetrics
 from semantic_judge import SemanticJudge, run_judge_all
@@ -67,7 +68,7 @@ def run_benchmark(
                     native_times.setdefault(k, []).append(v)
 
             # Compiled rules
-            ct = benchmark.benchmark_compiled(tc.traffic_state, tc.callsign)
+            ct = benchmark.benchmark_compiled(tc.traffic_state, tc.callsign, instruction=tc.instruction)
             if is_meas:
                 for k, v in ct.items():
                     compiled_times.setdefault(k, []).append(v)
@@ -96,15 +97,15 @@ def run_benchmark(
 
         # Collect eval results (from compiled + generic)
         eval_results = {}
+        parsed_instruction = benchmark._parse_instruction(tc.instruction)
         for rule_id in benchmark.compiled_rules:
             ct_vals = compiled_times.get(rule_id, [])
             if ct_vals:
                 avg = sum(ct_vals) / len(ct_vals)
                 fn = benchmark.compiled_rules[rule_id]
                 try:
-                    ts = __import__("benchmark_runner", fromlist=["build_traffic_state"]).build_traffic_state(tc.traffic_state)
-                    import time as _time
-                    res = fn(ts, callsign=tc.callsign)
+                    ts = benchmark_runner.build_traffic_state(tc.traffic_state)
+                    res = fn(ts, callsign=tc.callsign, instruction=parsed_instruction)
                     eval_results[rule_id] = EvalResult(
                         rule_id=rule_id,
                         satisfied=res.get("satisfied", True),
