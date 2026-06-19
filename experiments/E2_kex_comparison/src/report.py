@@ -154,8 +154,9 @@ def plot_radar_comparison(
         "Content\nMatch",
         "Cross-Ref\nValidity",
         "Semantic\nScore",
+        "Error\nScore",
     ]
-    values_keys = ["structural_f1", "content_avg", "cross_ref_avg", "semantic_avg"]
+    values_keys = ["structural_f1", "content_avg", "cross_ref_avg", "semantic_avg", "error_avg"]
     n_metrics = len(metrics_names)
 
     angles = np.linspace(0, 2 * np.pi, n_metrics, endpoint=False).tolist()
@@ -194,7 +195,7 @@ def plot_error_rate_heatmap(
             pm_list = results.page_results[model]
             pm = next((p for p in pm_list if p.page == page), None)
             if pm:
-                matrix[i, j] = pm.structural_metrics.total_model_items - pm.structural_metrics.total_gt_items
+                matrix[i, j] = pm.structural_metrics.error_rate
 
     labels = [_short_name(m) for m in results.model_names]
     page_labels = [f"P{p}" for p in results.pages]
@@ -203,17 +204,177 @@ def plot_error_rate_heatmap(
     sns.heatmap(
         matrix,
         annot=True,
-        fmt=".0f",
+        fmt=".3f",
+        cmap="YlOrRd",
+        xticklabels=page_labels,
+        yticklabels=labels,
+        ax=ax,
+        vmin=0,
+        vmax=1,
+        cbar_kws={"label": "Error Rate (errors / model items)"},
+    )
+    ax.set_xlabel("Page", fontsize=11)
+    ax.set_ylabel("Model", fontsize=11)
+    ax.set_title("Extraction Error Rate per Page", fontsize=13, fontweight="bold")
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_ranking_table(
+    results: EvaluationResults,
+    cfg: E2Config,
+) -> plt.Figure:
+    sorted_models = sorted(
+        results.model_names, key=lambda m: results.summaries[m].overall_score, reverse=True
+    )
+
+    headers = ["Rank", "Model", "Overall", "Structural F1", "Content", "CrossRef", "Semantic", "Extraction\nQuality"]
+
+    numeric_cols = list(range(2, len(headers)))
+    higher_is_better = {2: True, 3: True, 4: True, 5: True, 6: True, 7: True}
+
+    rows = []
+    for rank, model in enumerate(sorted_models, 1):
+        sm = results.summaries[model]
+        rows.append([
+            rank,
+            _short_name(model),
+            f"{sm.overall_score:.3f}",
+            f"{sm.structural_f1:.3f}",
+            f"{sm.content_avg:.3f}",
+            f"{sm.cross_ref_avg:.3f}",
+            f"{sm.semantic_avg:.3f}",
+            f"{sm.error_avg:.3f}",
+        ])
+
+    best_vals = {}
+    for col_idx in numeric_cols:
+        vals = [float(row[col_idx]) for row in rows]
+        if higher_is_better[col_idx]:
+            best_vals[col_idx] = max(vals)
+        else:
+            best_vals[col_idx] = min(vals)
+
+    n_rows = len(rows)
+    row_height = 0.45
+    fig_height = n_rows * row_height + 1.5
+    fig, ax = plt.subplots(figsize=(11, fig_height))
+    ax.axis("off")
+
+    table = ax.table(
+        cellText=rows,
+        colLabels=headers,
+        loc="center",
+        cellLoc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1, 1.6)
+
+    col_widths = [0.05, 0.17, 0.08, 0.09, 0.08, 0.08, 0.09, 0.08]
+    for (row, col), cell in table.get_celld().items():
+        if col < len(col_widths):
+            cell.set_width(col_widths[col])
+
+    for j in range(len(headers)):
+        cell = table[0, j]
+        cell.set_facecolor("#2c3e50")
+        cell.set_text_props(color="white", fontweight="bold")
+
+    for i in range(n_rows):
+        model_name = sorted_models[i]
+        is_gemini = "gemini" in model_name.lower()
+        for j in range(len(headers)):
+            cell = table[i + 1, j]
+            if is_gemini:
+                cell.set_facecolor("#fff3cd")
+                cell.set_text_props(fontweight="bold")
+            elif i % 2 == 0:
+                cell.set_facecolor("#f8f9fa")
+            else:
+                cell.set_facecolor("#ffffff")
+            if j == 1:
+                cell.set_text_props(ha="left")
+            if j in numeric_cols and not is_gemini:
+                val = float(rows[i][j])
+                if val == best_vals[j]:
+                    cell.set_facecolor("#d4edda")
+                    cell.set_text_props(fontweight="bold")
+
+    for i in range(n_rows + 1):
+        table[i, 0].set_text_props(ha="center")
+
+    ax.set_title(
+        "Model Ranking by Overall Score",
+        fontsize=13, fontweight="bold", pad=10, y=0.88
+    )
+
+    fig.subplots_adjust(top=0.7)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_cross_ref_heatmap(
+    results: EvaluationResults,
+    cfg: E2Config,
+) -> plt.Figure:
+    matrix = np.zeros((len(results.model_names), len(results.pages)))
+    for i, model in enumerate(results.model_names):
+        for j, page in enumerate(results.pages):
+            pm = next((p for p in results.page_results[model] if p.page == page), None)
+            if pm:
+                matrix[i, j] = pm.structural_metrics.overall_cross_ref
+
+    labels = [_short_name(m) for m in results.model_names]
+    page_labels = [f"P{p}" for p in results.pages]
+
+    fig, ax = plt.subplots(figsize=(max(8, len(results.pages) * 1.2), max(5, len(results.model_names) * 1.2)))
+    sns.heatmap(
+        matrix,
+        annot=True,
+        fmt=".3f",
         cmap="RdYlGn",
         xticklabels=page_labels,
         yticklabels=labels,
         ax=ax,
-        cbar_kws={"label": "Model - GT Item Count"},
-        center=0,
+        vmin=0,
+        vmax=1,
+        center=0.5,
+        cbar_kws={"label": "Cross-Ref Validity (0 = broken, 1 = valid)"},
     )
     ax.set_xlabel("Page", fontsize=11)
     ax.set_ylabel("Model", fontsize=11)
-    ax.set_title("Model vs GT Item Count Difference", fontsize=13, fontweight="bold")
+    ax.set_title("Cross-Reference Validity per Page", fontsize=13, fontweight="bold")
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_type_cross_ref_comparison(
+    results: EvaluationResults,
+    cfg: E2Config,
+) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    x = np.arange(len(KEX_TYPES))
+    width = 0.8 / len(results.model_names)
+
+    for i, model in enumerate(results.model_names):
+        sm = results.summaries[model]
+        vals = [sm.type_cross_ref.get(k, 0.0) for k in KEX_TYPES]
+        offset = (i - len(results.model_names) / 2 + 0.5) * width
+        ax.bar(x + offset, vals, width, label=_short_name(model), alpha=0.8)
+
+    ax.set_xlabel("Knowledge Type", fontsize=11)
+    ax.set_ylabel("Cross-Ref Validity", fontsize=11)
+    ax.set_title("Cross-Reference Validity by Knowledge Type", fontsize=13, fontweight="bold")
+    ax.set_xticks(x)
+    ax.set_xticklabels([TYPE_LABELS[k] for k in KEX_TYPES])
+    ax.legend(fontsize=9)
+    ax.grid(axis="y", alpha=0.3)
+    ax.set_ylim(0, 1.05)
 
     plt.tight_layout()
     return fig
@@ -306,6 +467,9 @@ def generate_report(
         "error_rate_heatmap": plot_error_rate_heatmap(results, cfg),
         "per_page_f1": plot_per_page_f1(results, cfg),
         "per_page_semantic": plot_per_page_semantic(results, cfg),
+        "ranking_table": plot_ranking_table(results, cfg),
+        "cross_ref_heatmap": plot_cross_ref_heatmap(results, cfg),
+        "type_cross_ref_comparison": plot_type_cross_ref_comparison(results, cfg),
     }
 
     if save_figures:
@@ -330,6 +494,7 @@ def generate_report(
                 "cross_ref_avg": results.summaries[m].cross_ref_avg,
                 "semantic_avg": results.summaries[m].semantic_avg,
                 "dedup_avg": results.summaries[m].dedup_avg,
+                "error_avg": results.summaries[m].error_avg,
             }
             for i, m in enumerate(sorted_models)
         ]

@@ -27,7 +27,7 @@ def main():
     parser.add_argument("--judge-api-key", type=str, default="ollama")
     parser.add_argument("--judge-max-retries", type=int, default=3)
     parser.add_argument("--fuzzy-threshold", type=float, default=70.0)
-    parser.add_argument("--semantic-weight", type=float, default=0.60)
+    parser.add_argument("--semantic-weight", type=float, default=0.55)
     parser.add_argument("--no-dedup", action="store_true", help="Skip dedup analysis")
     parser.add_argument("--dedup-batch-size", type=int, default=10, help="Batch size for dedup LLM calls")
     parser.add_argument("--dedup-threshold", type=float, default=0.80, help="Similarity threshold for dedup")
@@ -82,7 +82,7 @@ def main():
     if judge_cfg.enabled:
         print(f"    Model:     {judge_cfg.model_name}")
         print(f"    Provider:  {judge_cfg.provider}")
-    print(f"  Weights:     Structural={metric_cfg.structural_weight}, Content={metric_cfg.content_weight}, CrossRef={metric_cfg.cross_ref_weight}, Semantic={metric_cfg.semantic_weight}")
+    print(f"  Weights:     Structural={metric_cfg.structural_weight}, Content={metric_cfg.content_weight}, CrossRef={metric_cfg.cross_ref_weight}, Semantic={metric_cfg.semantic_weight}, Error={metric_cfg.error_weight}")
     print(f"  Dedup:       {'enabled' if dedup_cfg.enabled else 'disabled'}")
     if dedup_cfg.enabled:
         print(f"    Batch:    {dedup_cfg.batch_size}")
@@ -131,7 +131,7 @@ def main():
     print("MODEL RANKING (by overall score):")
     for entry in report.get("ranking", []):
         print(f"  #{entry['rank']}: {entry['model']}")
-        print(f"       Score={entry['overall_score']:.3f} | F1={entry['structural_f1']:.3f} | Content={entry['content_avg']:.3f} | CrossRef={entry['cross_ref_avg']:.3f} | Semantic={entry['semantic_avg']:.3f} | Dedup={entry.get('dedup_avg', 0):.3f}")
+        print(f"       Score={entry['overall_score']:.3f} | F1={entry['structural_f1']:.3f} | Content={entry['content_avg']:.3f} | CrossRef={entry['cross_ref_avg']:.3f} | Semantic={entry['semantic_avg']:.3f} | ExtractQ={entry.get('error_avg', 1):.3f}")
 
     print()
     print("=" * 60)

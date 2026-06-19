@@ -31,6 +31,7 @@ class ModelPageMetrics:
     semantic_scores: Dict[str, SemanticScores] = field(default_factory=dict)
     overall_semantic: float = 0.0
     dedup_score: float = 0.0
+    error_score: float = 1.0
     overall_score: float = 0.0
 
 
@@ -45,6 +46,8 @@ class ModelSummaryMetrics:
     content_avg: float = 0.0
     cross_ref_avg: float = 0.0
     semantic_avg: float = 0.0
+    dedup_avg: float = 0.0
+    error_avg: float = 0.0
 
     type_structural_f1: Dict[str, float] = field(default_factory=dict)
     type_content: Dict[str, float] = field(default_factory=dict)
@@ -68,6 +71,7 @@ def _compute_summary(
     s.cross_ref_avg = sum(pm.structural_metrics.overall_cross_ref for pm in page_metrics_list) / max(len(page_metrics_list), 1)
     s.semantic_avg = sum(pm.overall_semantic for pm in page_metrics_list) / max(len(page_metrics_list), 1)
     s.dedup_avg = sum(pm.dedup_score for pm in page_metrics_list) / max(len(page_metrics_list), 1)
+    s.error_avg = sum(pm.error_score for pm in page_metrics_list) / max(len(page_metrics_list), 1)
 
     for kex_type in KEX_TYPES:
         f1s = []
@@ -93,8 +97,8 @@ def _compute_summary(
         metric_cfg.structural_weight * s.structural_f1
         + metric_cfg.content_weight * s.content_avg
         + metric_cfg.cross_ref_weight * s.cross_ref_avg
-        + metric_cfg.dedup_weight * s.dedup_avg
         + metric_cfg.semantic_weight * s.semantic_avg
+        + metric_cfg.error_weight * s.error_avg
     )
 
     return s
@@ -118,6 +122,7 @@ class EvaluationResults:
                     "overall_score": pm.overall_score,
                     "overall_semantic": pm.overall_semantic,
                     "dedup_score": pm.dedup_score,
+                    "error_score": pm.error_score,
                     "structural": {
                         "overall_precision": pm.structural_metrics.overall_precision,
                         "overall_recall": pm.structural_metrics.overall_recall,
@@ -126,6 +131,11 @@ class EvaluationResults:
                         "overall_cross_ref": pm.structural_metrics.overall_cross_ref,
                         "total_gt_items": pm.structural_metrics.total_gt_items,
                         "total_model_items": pm.structural_metrics.total_model_items,
+                        "total_errors": pm.structural_metrics.total_errors,
+                        "extraction_failures": pm.structural_metrics.extraction_failures,
+                        "invalid_cross_refs": pm.structural_metrics.invalid_cross_refs,
+                        "error_rate": pm.structural_metrics.error_rate,
+                        "chunks_with_errors": pm.structural_metrics.chunks_with_errors,
                     },
                     "by_type": {
                         kex_type: {
@@ -169,6 +179,8 @@ class EvaluationResults:
                 "content_avg": sm.content_avg,
                 "cross_ref_avg": sm.cross_ref_avg,
                 "semantic_avg": sm.semantic_avg,
+                "dedup_avg": sm.dedup_avg,
+                "error_avg": sm.error_avg,
                 "by_type": {
                     kex_type: {
                         "structural_f1": sm.type_structural_f1.get(kex_type, 0.0),
@@ -350,22 +362,24 @@ def run_evaluation(
                         explanations=type_expl_agg[kex_type],
                     )
 
-                # Save page-level checkpoint
-                checkpoint_data = {
-                    "semantic_scores": {
-                        k: {"scores": ss.scores, "explanations": ss.explanations, "mean_score": ss.mean_score}
-                        for k, ss in semantic_scores.items()
-                    },
-                    "overall_semantic": overall_semantic,
-                }
-                save_checkpoint(
-                    e2_cfg.results_dir,
-                    f"holistic_page_{model_name}",
-                    str(page),
-                    checkpoint_data,
-                    config_hash
-                )
-                tracker.cleanup()
+                # Save page-level checkpoint (only when judge is enabled)
+                if judge.config.enabled:
+                    checkpoint_data = {
+                        "semantic_scores": {
+                            k: {"scores": ss.scores, "explanations": ss.explanations, "mean_score": ss.mean_score}
+                            for k, ss in semantic_scores.items()
+                        },
+                        "overall_semantic": overall_semantic,
+                    }
+                    save_checkpoint(
+                        e2_cfg.results_dir,
+                        f"holistic_page_{model_name}",
+                        str(page),
+                        checkpoint_data,
+                        config_hash
+                    )
+                if judge.config.enabled:
+                    tracker.cleanup()
             
             # Calculate dedup score for this model-page if dedup is enabled
             dedup_score = 0.0
@@ -375,15 +389,18 @@ def run_evaluation(
                 # overall_duplication_rate is percentage of items that are duplicates (0-1)
                 # We want: 0% dup -> 1.0 score, 100% dup -> 0.0 score
                 dedup_score = 1.0 - min(report.overall_duplication_rate, 1.0)
-            
+
+            # Compute error_score: 1.0 = no errors, 0.0 = all items are errors
+            error_score = 1.0 - min(structural.total_errors / max(structural.total_model_items, 1), 1.0)
+
             overall_score = (
                 metric_cfg.structural_weight * structural.overall_f1
                 + metric_cfg.content_weight * structural.overall_content
                 + metric_cfg.cross_ref_weight * structural.overall_cross_ref
-                + metric_cfg.dedup_weight * dedup_score  # Dedup weight: 20%
-                + metric_cfg.semantic_weight * overall_semantic  # Semantic weight: 40% (reduced from 60%)
+                + metric_cfg.semantic_weight * overall_semantic
+                + metric_cfg.error_weight * error_score
             )
-            
+
             mpm = ModelPageMetrics(
                 page=page,
                 model=model_name,
@@ -391,6 +408,7 @@ def run_evaluation(
                 semantic_scores=semantic_scores,
                 overall_semantic=overall_semantic,
                 dedup_score=dedup_score,
+                error_score=error_score,
                 overall_score=overall_score,
             )
             page_results[model_name].append(mpm)

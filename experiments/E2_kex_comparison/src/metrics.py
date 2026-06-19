@@ -56,6 +56,12 @@ class PageMetrics:
     overall_content: float = 0.0
     overall_cross_ref: float = 0.0
 
+    total_errors: int = 0
+    extraction_failures: int = 0
+    invalid_cross_refs: int = 0
+    error_rate: float = 0.0
+    chunks_with_errors: int = 0
+
 
 ENUM_FIELDS = {
     "entities": [],
@@ -279,5 +285,21 @@ def compute_page_metrics(
     pm.overall_f1 = sum(all_f1) / len(all_f1) if all_f1 else 0.0
     pm.overall_content = sum(all_content) / len(all_content) if all_content else 0.0
     pm.overall_cross_ref = sum(all_cross_ref) / len(all_cross_ref) if all_cross_ref else 0.0
+
+    # Compute error metrics from model_page.errors
+    if model_page.errors:
+        chunks_with_err = set()
+        for err in model_page.errors:
+            err_type = err.get("type", "")
+            if err_type == "extraction_failed":
+                pm.extraction_failures += 1
+            elif err_type == "invalid_cross_reference":
+                pm.invalid_cross_refs += 1
+            ci = err.get("chunk_index")
+            if ci is not None:
+                chunks_with_err.add(ci)
+        pm.total_errors = len(model_page.errors)
+        pm.chunks_with_errors = len(chunks_with_err)
+        pm.error_rate = pm.total_errors / max(pm.total_model_items, 1)
 
     return pm
