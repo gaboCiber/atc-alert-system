@@ -1,3 +1,4 @@
+import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,6 +10,75 @@ import benchmark_runner
 from benchmark_runner import SystemBenchmark, TcBenchmark, EvalResult
 from metrics import aggregate_latency, aggregate_accuracy, LatencyStats, AccuracyMetrics
 from semantic_judge import SemanticJudge, run_judge_all
+
+
+PARTIAL_FILE = "partial_results.json"
+
+
+def _serialize_bench(b: TcBenchmark) -> dict:
+    return {
+        "test_case_id": b.test_case_id,
+        "bert_ms": b.bert_ms,
+        "native_rules": b.native_rules,
+        "compiled_rules": b.compiled_rules,
+        "generic_rules": b.generic_rules,
+        "pipeline_e2e_ms": b.pipeline_e2e_ms,
+        "pipeline_steps": {str(k): v for k, v in b.pipeline_steps.items()},
+        "eval_results": {
+            rid: {
+                "rule_id": r.rule_id,
+                "satisfied": r.satisfied,
+                "severity": r.severity,
+                "latency_ms": r.latency_ms,
+                "error": r.error,
+                "explanation": r.explanation,
+            }
+            for rid, r in b.eval_results.items()
+        },
+    }
+
+
+def _deserialize_bench(d: dict) -> TcBenchmark:
+    eval_results = {}
+    for rid, rd in d.get("eval_results", {}).items():
+        eval_results[rid] = EvalResult(
+            rule_id=rd["rule_id"],
+            satisfied=rd["satisfied"],
+            severity=rd["severity"],
+            latency_ms=rd["latency_ms"],
+            error=rd.get("error"),
+            explanation=rd.get("explanation", ""),
+        )
+    return TcBenchmark(
+        test_case_id=d["test_case_id"],
+        bert_ms=d.get("bert_ms", 0.0),
+        native_rules=d.get("native_rules", {}),
+        compiled_rules=d.get("compiled_rules", {}),
+        generic_rules=d.get("generic_rules", {}),
+        pipeline_e2e_ms=d.get("pipeline_e2e_ms", 0.0),
+        pipeline_steps={int(k): v for k, v in d.get("pipeline_steps", {}).items()},
+        eval_results=eval_results,
+    )
+
+
+def load_partial(results_dir: Path) -> Dict[str, TcBenchmark]:
+    path = results_dir / PARTIAL_FILE
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r") as f:
+            raw = json.load(f)
+        return {tid: _deserialize_bench(d) for tid, d in raw.items()}
+    except Exception:
+        return {}
+
+
+def save_partial(results_dir: Path, partial: Dict[str, TcBenchmark]) -> None:
+    results_dir.mkdir(parents=True, exist_ok=True)
+    path = results_dir / PARTIAL_FILE
+    data = {tid: _serialize_bench(b) for tid, b in partial.items()}
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
 
 
 @dataclass
@@ -38,11 +108,22 @@ def run_benchmark(
 
     print(f"\n  Loaded {len(benchmark.compiled_rules)} compiled rules")
     print(f"  Test cases: {len(test_cases)}")
+
+    # Load partial results for resume
+    partial = load_partial(cfg.results_dir)
+    if partial:
+        print(f"  Resuming: {len(partial)} test cases already completed")
     print()
 
-    all_benchmarks = []
+    all_benchmarks: List[TcBenchmark] = []
 
     for tc in test_cases:
+        # Resume: skip if already completed
+        if tc.id in partial:
+            print(f"  [{tc.id}] [RESUMED] (cached)")
+            all_benchmarks.append(partial[tc.id])
+            continue
+
         print(f"  [{tc.id}] {tc.description}")
 
         bert_times: List[float] = []
@@ -137,6 +218,10 @@ def run_benchmark(
         print(f"    {' | '.join(parts)}")
 
         all_benchmarks.append(tc_bench)
+
+        # Save partial results after each test case
+        partial[tc.id] = tc_bench
+        save_partial(cfg.results_dir, partial)
 
     print()
 
