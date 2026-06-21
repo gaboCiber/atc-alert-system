@@ -27,13 +27,13 @@ def _to_as_filter_config(filter_config: FilterConfig) -> ASFilterConfig:
 
 def _get_compiled_rule_ids(compiled_rules_dir: Path) -> Set[str]:
     manifest = compiled_rules_dir / "manifest.json"
-    if manifest.exists():
-        try:
-            with open(manifest, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return set(data.get("rules", {}).keys())
-        except Exception:
-            pass
+    # if manifest.exists():
+    #     try:
+    #         with open(manifest, "r", encoding="utf-8") as f:
+    #             data = json.load(f)
+    #         return set(data.get("rules", {}).keys())
+    #     except Exception:
+    #         pass
     return {p.stem for p in compiled_rules_dir.glob("RULE*.py")}
 
 
@@ -67,7 +67,7 @@ def load_all_rules(
             rule_engine, llm_config, rules_json_path, compiled_ids, verbose
         )
     elif verbose:
-        print("   ⏭️  Reglas genéricas omitidas (--skip-generic)")
+        print("   ⏭️  Reglas genéricas  (--skip-generic)")
 
     rule_filter = RuleFilter(_to_as_filter_config(filter_config))
 
