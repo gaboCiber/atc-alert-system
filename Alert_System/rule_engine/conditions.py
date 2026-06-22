@@ -684,7 +684,29 @@ class GenericKexCondition(ConditionEvaluator):
         
         # Fallback: evaluación por keywords
         return self._evaluate_with_keywords(executable, traffic_state, aircraft_callsign, instruction=instruction)
-    
+
+    def _llm_call_with_retries(
+        self,
+        client,
+        model: str,
+        response_model: type,
+        messages: list,
+        max_retries: int,
+    ) -> Any:
+        """Wrapper para llamadas LLM con retry manual por timeouts HTTP."""
+        for attempt in range(max_retries + 1):
+            try:
+                return client.chat.completions.create(
+                    model=model,
+                    response_model=response_model,
+                    messages=messages,
+                )
+            except Exception as e:
+                if attempt < max_retries:
+                    print(f"  LLM attempt {attempt + 1}/{max_retries + 1} failed: {e}, retrying...")
+                    continue
+                raise
+
     def _evaluate_with_llm(
         self,
         executable: Any,  # ExecutableRule from integration.schemas
@@ -733,15 +755,16 @@ class GenericKexCondition(ConditionEvaluator):
             instruction_summary=instruction_summary,
         )
         
-        # Call LLM with structured output
-        response = self._instructor_client.chat.completions.create(
+        # Call LLM with structured output using retry wrapper
+        response = self._llm_call_with_retries(
+            client=self._instructor_client,
             model=self.llm_config.name,
             response_model=LLMEvaluationResult,
-            max_retries=self.llm_config.max_retries,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
+            max_retries=self.llm_config.max_retries,
         )
         
         # Convert LLM result to ConditionResult

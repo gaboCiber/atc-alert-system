@@ -144,6 +144,28 @@ class RuleFilter:
         if self.config.verbose:
             print(f"  [FILTER] {msg}", flush=True)
 
+    def _llm_batch_call_with_retries(
+        self,
+        client,
+        model: str,
+        response_model: type,
+        messages: list,
+        max_retries: int,
+    ) -> Any:
+        """Wrapper para llamadas LLM batch con retry manual por timeouts HTTP."""
+        for attempt in range(max_retries + 1):
+            try:
+                return client.chat.completions.create(
+                    model=model,
+                    response_model=response_model,
+                    messages=messages,
+                )
+            except Exception as e:
+                if attempt < max_retries:
+                    self._log(f"  LLM batch attempt {attempt + 1}/{max_retries + 1} failed: {e}, retrying...")
+                    continue
+                raise
+
     def _keyword_filter(
         self,
         rules: List[ExecutableRule],
@@ -269,14 +291,15 @@ class RuleFilter:
                 f"summary y relevant_count."
             )
 
-            response = client.chat.completions.create(
+            response = self._llm_batch_call_with_retries(
+                client=client,
                 model=llm_config.name,
                 response_model=RelevanceFilterResult,
-                max_retries=llm_config.max_retries,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
+                max_retries=llm_config.max_retries,
             )
 
             relevant_indices = {
