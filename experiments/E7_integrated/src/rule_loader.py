@@ -70,6 +70,7 @@ def load_all_rules(
         print("   ⏭️  Reglas genéricas omitidas (--skip-generic)")
 
     rule_filter = RuleFilter(_to_as_filter_config(filter_config))
+    rule_filter._get_embedding_model()  # Preload embedding model
 
     if generic_count > 0:
         loaded_rules = [

@@ -57,6 +57,8 @@ class IntegratedPipelineBenchmark:
                 model_name=cfg.bert.model_name,
                 confidence_threshold=cfg.bert.confidence_threshold,
             )
+            self.bert_parser._initialize()
+
         self.asr_adapter = ASRAdapter(bert_parser=self.bert_parser)
         if cfg.verbose:
             print(f"   ASRAdapter listo ({(time.perf_counter()-t0)*1000:.0f}ms)")
