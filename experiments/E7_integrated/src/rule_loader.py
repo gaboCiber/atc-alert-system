@@ -67,7 +67,7 @@ def load_all_rules(
             rule_engine, llm_config, rules_json_path, compiled_ids, verbose
         )
     elif verbose:
-        print("   ⏭️  Reglas genéricas  (--skip-generic)")
+        print("   ⏭️  Reglas genéricas omitidas (--skip-generic)")
 
     rule_filter = RuleFilter(_to_as_filter_config(filter_config))
 

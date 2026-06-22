@@ -194,8 +194,8 @@ class RuleFilter:
         self._log(f"Capa 1b - Embeddings: {len(candidates)} candidatas, top_k={top_k}")
         model = self._get_embedding_model()
         if model is None or not self._rule_embeddings:
-            self._log("  Modelo embeddings no disponible, saltando re-rank")
-            return candidates
+            self._log(f"  Modelo embeddings no disponible, truncando a top_k={top_k}")
+            return candidates[:top_k]
 
         instruction_embedding = model.encode(instruction_text, convert_to_numpy=True)
 

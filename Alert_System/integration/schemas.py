@@ -46,12 +46,12 @@ class RuleRelevance(BaseModel):
 
     rule_index: int = Field(..., ge=0, description="Índice 0-based de la regla en la lista candidata")
     is_relevant: bool = Field(..., description="Si la regla es relevante para la instrucción")
-    reason: str = Field(..., max_length=100, description="Breve justificación de por qué aplica o no")
+    reason: str = Field(..., description="Breve justificación de por qué aplica o no")
 
 
 class RelevanceFilterResult(BaseModel):
     """Resultado del filtro batch de relevancia vía LLM."""
 
     relevances: List[RuleRelevance] = Field(..., description="Lista de relevancias por regla")
-    summary: str = Field(..., max_length=200, description="Resumen de cuántas reglas son relevantes")
+    summary: str = Field(..., description="Resumen de cuántas reglas son relevantes")
     relevant_count: int = Field(..., ge=0, description="Número total de reglas marcadas como relevantes")
