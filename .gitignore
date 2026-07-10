@@ -211,3 +211,22 @@ docs
 work_notes
 Knowledge_Extractor/output
 save_storage
+ASR/Recordings
+.venv*
+Alert_System/compiled_rules
+cache
+# ...existing code...
+# Ignore everything in experiments except README.md and src/ directories
+experiments/**
+# allow directories so negated patterns can re-include files inside them
+!experiments/**/
+# keep README files (common casings) at root and nested
+!experiments/README.md
+!experiments/Readme.md
+!experiments/**/README.md
+!experiments/**/Readme.md
+# keep src directories and their contents
+!experiments/**/src/
+!experiments/**/src/**
+!experiments/E2_kex_comparison/scripts/**
+experiments/**/__pycache__
