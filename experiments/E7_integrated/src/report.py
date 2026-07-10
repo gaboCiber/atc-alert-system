@@ -38,6 +38,9 @@ def generate_report(results: E7Results, cfg, save_figures: bool = True) -> Dict[
         fig_paths.update(_plot_judge_distribution(results, figures_dir))
         fig_paths.update(_plot_recall_precision_scatter(results, figures_dir))
         fig_paths.update(_plot_latency_flame(results, figures_dir))
+        fig_paths.update(_plot_tp_fp_fn_stacked_horizontal(results, figures_dir))
+        fig_paths.update(_plot_tp_fp_fn_heatmap(results, figures_dir))
+        fig_paths.update(_plot_tp_fp_fn_zoom_distribution(results, figures_dir))
 
     summary = {
         "latency": results.latency,
@@ -226,3 +229,141 @@ def _plot_latency_flame(results: E7Results, figures_dir: Path) -> Dict[str, str]
     fig.savefig(path, dpi=150)
     plt.close(fig)
     return {"latency_flame": str(path)}
+
+
+def _plot_tp_fp_fn_stacked_horizontal(results: E7Results, figures_dir: Path) -> Dict[str, str]:
+    per_tc = results.per_tc_accuracy
+    if not per_tc:
+        return {}
+
+    items = [(tc_id, m.get("tp", 0), m.get("fp", 0), m.get("fn", 0))
+             for tc_id, m in per_tc.items()]
+    items.sort(key=lambda x: x[1] + x[2] + x[3], reverse=True)
+
+    tc_ids = [x[0] for x in items]
+    tps = [x[1] for x in items]
+    fps = [x[2] for x in items]
+    fns = [x[3] for x in items]
+
+    y_pos = np.arange(len(tc_ids))
+    bar_h = 0.5
+
+    fig, ax = plt.subplots(figsize=(12, 11))
+    ax.barh(y_pos, tps, bar_h, label="TP", color="#2ca02c")
+    ax.barh(y_pos, fns, bar_h, left=tps, label="FN", color="#ff7f0e")
+    ax.barh(y_pos, fps, bar_h, left=[t + fn for t, fn in zip(tps, fns)],
+            label="FP", color="#d62728")
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(tc_ids, fontsize=6)
+    ax.set_xlabel("Alert count")
+    ax.set_title("TP / FN / FP per Test Case (sorted by total errors)")
+    ax.invert_yaxis()
+    ax.legend(loc="lower right")
+    ax.grid(axis="x", alpha=0.3)
+
+    path = figures_dir / "tp_fp_fn_stacked_per_tc.png"
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return {"tp_fp_fn_stacked_per_tc": str(path)}
+
+
+def _plot_tp_fp_fn_heatmap(results: E7Results, figures_dir: Path) -> Dict[str, str]:
+    per_tc = results.per_tc_accuracy
+    if not per_tc:
+        return {}
+
+    tc_ids = sorted(per_tc.keys())
+    n = len(tc_ids)
+    data = np.zeros((n, 3), dtype=int)
+    for i, tc_id in enumerate(tc_ids):
+        m = per_tc[tc_id]
+        data[i, 0] = m.get("tp", 0)
+        data[i, 1] = m.get("fp", 0)
+        data[i, 2] = m.get("fn", 0)
+
+    vmax = data.max()
+    fig, ax = plt.subplots(figsize=(6, n * 0.28 + 1))
+    im = ax.imshow(data, aspect="auto", cmap="YlOrRd", vmin=0, vmax=max(vmax, 1))
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.02, pad=0.02)
+    cbar.set_label("Count")
+
+    ax.set_xticks(range(3))
+    ax.set_xticklabels(["TP", "FP", "FN"], fontsize=9)
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(tc_ids, fontsize=5)
+
+    for i in range(n):
+        for j in range(3):
+            val = data[i, j]
+            color = "white" if val > vmax * 0.6 else "black"
+            ax.text(j, i, str(val), ha="center", va="center", fontsize=4.5, color=color)
+
+    ax.set_title("TP / FP / FN Heatmap (50 TCs)", fontsize=10)
+    fig.tight_layout()
+    path = figures_dir / "tp_fp_fn_heatmap.png"
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return {"tp_fp_fn_heatmap": str(path)}
+
+
+def _plot_tp_fp_fn_zoom_distribution(results: E7Results, figures_dir: Path) -> Dict[str, str]:
+    per_tc = results.per_tc_accuracy
+    if not per_tc:
+        return {}
+
+    items = [(tc_id, m.get("tp", 0), m.get("fp", 0), m.get("fn", 0))
+             for tc_id, m in per_tc.items()]
+
+    problematic = [(tc_id, tp, fp, fn) for tc_id, tp, fp, fn in items if fp > 5 or fn > 0]
+    problematic.sort(key=lambda x: x[1] + x[2] + x[3], reverse=True)
+
+    all_fps = [fp for _, _, fp, _ in items]
+    all_fns = [fn for _, _, _, fn in items]
+    max_fn = max(all_fns) if all_fns else 0
+    max_fp_bin = max(all_fps) if all_fps else 10
+
+    bin_edges = list(range(0, max_fp_bin + 2, max(1, (max_fp_bin + 1) // 15)))
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 7),
+                                    gridspec_kw={"width_ratios": [1, 1]})
+
+    if problematic:
+        tc_ids_p = [x[0] for x in problematic]
+        tps_p = [x[1] for x in problematic]
+        fps_p = [x[2] for x in problematic]
+        fns_p = [x[3] for x in problematic]
+        y_pos_p = np.arange(len(tc_ids_p))
+        bar_h = 0.5
+
+        ax1.barh(y_pos_p, tps_p, bar_h, label="TP", color="#2ca02c")
+        ax1.barh(y_pos_p, fns_p, bar_h, left=tps_p, label="FN", color="#ff7f0e")
+        ax1.barh(y_pos_p, fps_p, bar_h,
+                 left=[t + fn for t, fn in zip(tps_p, fns_p)],
+                 label="FP", color="#d62728")
+        ax1.set_yticks(y_pos_p)
+        ax1.set_yticklabels(tc_ids_p, fontsize=7)
+        ax1.invert_yaxis()
+        ax1.set_xlabel("Alert count")
+        ax1.set_title(f"TCs with FP>5 or FN>0 ({len(problematic)} TCs)")
+        ax1.legend(loc="lower right")
+        ax1.grid(axis="x", alpha=0.3)
+    else:
+        ax1.text(0.5, 0.5, "No problematic TCs", ha="center", va="center", transform=ax1.transAxes)
+        ax1.set_title("Zoom: problematic TCs")
+
+    ax2.hist(all_fps, bins=bin_edges, alpha=0.7, label="FP", color="#d62728", edgecolor="white")
+    ax2.hist(all_fns, bins=bin_edges, alpha=0.7, label="FN", color="#ff7f0e", edgecolor="white")
+    ax2.set_xlabel("Count per TC")
+    ax2.set_ylabel("Number of TCs")
+    ax2.set_title("Distribution of FP and FN across TCs")
+    ax2.legend()
+    ax2.grid(axis="y", alpha=0.3)
+
+    fig.tight_layout()
+    path = figures_dir / "tp_fp_fn_zoom_distribution.png"
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return {"tp_fp_fn_zoom_distribution": str(path)}

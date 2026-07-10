@@ -79,9 +79,6 @@ class IntegratedPipelineBenchmark:
             print(f"   Init total: {(time.perf_counter()-t0)*1000:.0f}ms\n")
 
     def run_test_case(self, tc: TestCase) -> TcPipelineResult:
-        import time
-        tc_start = time.perf_counter()
-
         traffic = traffic_state_to_alert_system(tc)
         state_manager = StateManager(traffic)
 
@@ -94,9 +91,6 @@ class IntegratedPipelineBenchmark:
             filter_top_k=self.cfg.filter.top_k,
             verbose=self.cfg.verbose,
         )
-
-        if self.cfg.verbose:
-            print(f"  [Setup] {(time.perf_counter() - tc_start)*1000:.0f}ms", flush=True)
 
         transcription = SimpleNamespace(
             text=tc.instruction,
@@ -119,9 +113,6 @@ class IntegratedPipelineBenchmark:
             )
         parse_ms = (time.perf_counter() - parse_start) * 1000
 
-        if self.cfg.verbose:
-            print(f"  [Parse] {parse_ms:.0f}ms", flush=True)
-
         try:
             result = pipeline.process_instruction(parsed.raw_text, pre_parsed=parsed)
         except Exception as e:
@@ -131,9 +122,6 @@ class IntegratedPipelineBenchmark:
                 error=f"Pipeline error: {e}",
                 has_errors=True,
             )
-
-        if self.cfg.verbose:
-            print(f"  [Pipeline] {(time.perf_counter() - parse_start)*1000:.0f}ms", flush=True)
 
         return self._build_tc_result(tc.id, result, parse_ms)
 
