@@ -323,3 +323,31 @@ class Atco2DataLoader(BaseDataLoader):
                                 callsigns[callsign] = phonetic
         
         return callsigns
+
+    @staticmethod
+    def export_ground_truth_csv(data_dir: str, output_path: str, filter_valid: bool = True) -> int:
+        """
+        Export ground truth to CSV file for E3 experiment.
+        
+        Args:
+            data_dir: Path to ATCO2 dataset directory (containing DATA/ subdirectory)
+            output_path: Path to output CSV file
+            filter_valid: If True, only include segments with correct_transcript=1
+            
+        Returns:
+            Number of samples exported
+        """
+        loader = Atco2DataLoader()
+        if filter_valid:
+            gt = loader.load_ground_truth_valid(data_dir)
+        else:
+            gt = loader.load_ground_truth_all(data_dir)
+        
+        import csv
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['id', 'text'])
+            for k, v in sorted(gt.items()):
+                writer.writerow([k, v])
+        
+        return len(gt)
